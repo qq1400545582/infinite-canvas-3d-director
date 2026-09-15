@@ -20,6 +20,10 @@ const OFFICIAL = [
     { id: "html", dir: "html", name: "HTML 节点", description: "沙箱 iframe 渲染 HTML,支持 {{input}} 注入上游文本", icon: "🌐" },
     { id: "panorama", dir: "panorama", name: "3D 全景节点", description: "查看 360° 等距柱状全景图,可从上游图片节点取图", icon: "🧭" },
     { id: "sticky-note", dir: "sticky-note", name: "便利贴节点", description: "可自选颜色、双击编辑、拖动即可移动的便利贴", icon: "📌" },
+    // 3D 导演台：以同源 iframe 内嵌 jlmlh-3d-director（app/ 下 vendor 的源码逻辑不改），
+    // 本插件只做 iframe + postMessage 桥接。除本 bundle 外，还需先 `npm run build:app`
+    // 把导演台构建到 web/public/jlmlh-3d-director/（同源静态资源，随仓库提交）。
+    { id: "jlmlh-3d-director", dir: "jlmlh-3d-director", name: "3D 导演台节点", description: "在画布内嵌 jlmlh-3d-director 三维导演台:模型导入、机位管理、时间线动画、截图导出到画布", icon: "🎬" },
 ];
 
 // 读取插件 package.json 的 version 作为清单版本的唯一来源

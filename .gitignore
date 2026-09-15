@@ -15,3 +15,7 @@ web/public/plugins
 plugins/canvas/*/dist
 plugins/canvas/*/node_modules
 web/public/plugins
+
+# 本地下载的 jlmlh-3d-director 官方源码副本（用于一致性比对，非项目内容）
+_jlmlh-extract/
+_jlmlh.tar.gz
