@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { installPluginFromUrl, setPluginEnabled, uninstallPlugin, updatePlugin } from "@/lib/canvas/plugin-loader";
+import { getPluginManagerTabs } from "@/lib/canvas/plugin-manager-tabs";
 import { fetchOfficialPlugins, hasUpgrade, type OfficialPluginEntry } from "@/lib/canvas/plugin-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { usePluginStore, type InstalledPlugin } from "@/stores/canvas/use-plugin-store";
@@ -207,10 +208,13 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
         </div>
     );
 
-    const tabs = [
+    const tabs: { key: string; label: ReactNode; children: ReactNode }[] = [
         { key: "official", label: t("canvas.plugins.official"), children: officialTab },
         ...(localPlugins.length > 0 ? [{ key: "local", label: t("canvas.plugins.local"), children: localTab }] : []),
         { key: "third", label: t("canvas.plugins.thirdParty"), children: thirdPartyTab },
+        // 其它模块通过扩展点注册的标签页（如专家库的「专家 / 技能 / 连接器」）。
+        // 未注册任何扩展时该展开为空数组，插件管理器行为与之前完全一致。
+        ...getPluginManagerTabs(),
     ];
 
     return (

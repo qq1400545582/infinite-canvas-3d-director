@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { ImageIcon, List, Music2, Settings2, Video, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -78,9 +78,34 @@ export function ConnectionCreateOption({ theme, icon, title, description, onClic
 export function NodeCreateMenu({ position, onCreate, onClose }: { position: Position; onCreate: (type: string) => void; onClose: () => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const { t } = useTranslation();
-    useNodeRegistryVersion();
+    const registryVersion = useNodeRegistryVersion((state) => state.version);
     const menuRef = useRef<HTMLDivElement>(null);
     const definitions = listNodeDefinitions().filter((def) => def.showInCreateMenu !== false);
+    // The menu lives in the scaled world layer. Keep its full scroll area inside
+    // the clipping canvas; moving the menu must not change the node creation point.
+    useLayoutEffect(() => {
+        const menu = menuRef.current;
+        const canvas = menu?.parentElement?.parentElement;
+        if (!menu || !canvas) return;
+        const fit = () => {
+            menu.style.left = `${position.x}px`;
+            menu.style.top = `${position.y}px`;
+            const scale = menu.getBoundingClientRect().width / menu.offsetWidth;
+            if (!Number.isFinite(scale) || scale <= 0) return;
+            const bounds = canvas.getBoundingClientRect();
+            const margin = 8;
+            menu.style.maxHeight = `${Math.max(1, Math.min(window.innerHeight * 0.7, bounds.height - margin * 2) / scale)}px`;
+            const rect = menu.getBoundingClientRect();
+            const left = Math.max(bounds.left + margin, Math.min(rect.left, bounds.right - rect.width - margin));
+            const top = Math.max(bounds.top + margin, Math.min(rect.top, bounds.bottom - rect.height - margin));
+            menu.style.left = `${position.x + (left - rect.left) / scale}px`;
+            menu.style.top = `${position.y + (top - rect.top) / scale}px`;
+        };
+        fit();
+        const observer = new ResizeObserver(fit);
+        observer.observe(canvas);
+        return () => observer.disconnect();
+    }, [position.x, position.y, registryVersion]);
     // Close automatically when clicking outside the menu.
     useEffect(() => {
         const handlePointerDown = (event: PointerEvent) => {

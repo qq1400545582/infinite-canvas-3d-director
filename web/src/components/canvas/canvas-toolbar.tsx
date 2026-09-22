@@ -1,9 +1,9 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
-import { Button, Segmented, Switch } from "antd";
+import { Button, Segmented, Slider, Switch } from "antd";
 import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, Moon, MousePointer2, Music2, Palette, Puzzle, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
 
-import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
+import { canvasThemes, type CanvasBackgroundMedia, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { getNodePluginId, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
@@ -16,6 +16,10 @@ export function CanvasToolbar({
     canRedo,
     backgroundMode,
     showImageInfo,
+    backgroundMedia,
+    backgroundOpacity,
+    fontOpacity,
+    nodeOpacity,
     onAddImage,
     onAddVideo,
     onAddAudio,
@@ -31,6 +35,11 @@ export function CanvasToolbar({
     onCanvasToolChange,
     onBackgroundModeChange,
     onShowImageInfoChange,
+    onSelectBackgroundMedia,
+    onClearBackgroundMedia,
+    onBackgroundOpacityChange,
+    onFontOpacityChange,
+    onNodeOpacityChange,
 }: {
     selectedCount: number;
     canvasTool: "select" | "pan";
@@ -38,6 +47,10 @@ export function CanvasToolbar({
     canRedo: boolean;
     backgroundMode: CanvasBackgroundMode;
     showImageInfo: boolean;
+    backgroundMedia: CanvasBackgroundMedia | null;
+    backgroundOpacity: number;
+    fontOpacity: number;
+    nodeOpacity: number;
     onAddImage: () => void;
     onAddVideo: () => void;
     onAddAudio: () => void;
@@ -53,8 +66,14 @@ export function CanvasToolbar({
     onCanvasToolChange: (tool: "select" | "pan") => void;
     onBackgroundModeChange: (mode: CanvasBackgroundMode) => void;
     onShowImageInfoChange: (show: boolean) => void;
+    onSelectBackgroundMedia: (file: File) => void;
+    onClearBackgroundMedia: () => void;
+    onBackgroundOpacityChange: (value: number) => void;
+    onFontOpacityChange: (value: number) => void;
+    onNodeOpacityChange: (value: number) => void;
 }) {
     const wrapRef = useRef<HTMLDivElement>(null);
+    const backgroundMediaInputRef = useRef<HTMLInputElement>(null);
     const { t } = useTranslation();
     const rootRef = useRef<HTMLDivElement>(null);
     const colorTheme = useThemeStore((state) => state.theme);
@@ -207,7 +226,7 @@ export function CanvasToolbar({
 
             {appearanceOpen ? (
                 <div
-                    className="pointer-events-auto absolute bottom-[72px] z-30 w-[248px] -translate-x-1/2 rounded-xl border p-2.5 shadow-xl backdrop-blur"
+                    className="thin-scrollbar pointer-events-auto absolute bottom-[72px] z-30 max-h-[70vh] w-[286px] -translate-x-1/2 overflow-y-auto rounded-xl border p-2.5 shadow-xl backdrop-blur"
                     style={{ left: panelX || "50%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item }}
                 >
                     <div className="px-1 pb-2 text-sm font-medium opacity-65">{t("canvas.toolbar.appearance")}</div>
@@ -255,6 +274,42 @@ export function CanvasToolbar({
                             },
                         ]}
                     />
+                    <div className="mt-3 px-1 pb-1.5 text-[11px] font-medium opacity-50">{t("canvas.toolbar.background")}</div>
+                    <div className="grid gap-1.5">
+                        <input
+                            ref={backgroundMediaInputRef}
+                            type="file"
+                            accept="image/*,video/*"
+                            className="hidden"
+                            onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                if (file) onSelectBackgroundMedia(file);
+                                event.target.value = "";
+                            }}
+                        />
+                        <div className="flex items-center gap-1.5">
+                            <Button size="small" className="!h-8 !min-w-0 flex-1 !px-2 !text-xs" style={{ color: theme.toolbar.item }} onClick={() => backgroundMediaInputRef.current?.click()}>
+                                <Upload className="size-3.5" />
+                                <span className="truncate">{backgroundMedia ? t("canvas.toolbar.replaceBackground") : t("canvas.toolbar.uploadBackground")}</span>
+                            </Button>
+                            {backgroundMedia ? (
+                                <Button size="small" className="!h-8 !w-8 !min-w-8 !p-0" aria-label={t("canvas.toolbar.clearBackground")} title={t("canvas.toolbar.clearBackground")} onClick={onClearBackgroundMedia}>
+                                    <Trash2 className="size-3.5" />
+                                </Button>
+                            ) : null}
+                        </div>
+                        {backgroundMedia ? (
+                            <div className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px]" style={{ background: theme.toolbar.itemHover }}>
+                                {backgroundMedia.kind === "video" ? <Video className="size-3.5 shrink-0" /> : <ImageIcon className="size-3.5 shrink-0" />}
+                                <span className="truncate">{backgroundMedia.name || backgroundMedia.mimeType}</span>
+                            </div>
+                        ) : (
+                            <div className="px-1 text-[10px] leading-4 opacity-45">{t("canvas.toolbar.backgroundHint")}</div>
+                        )}
+                    </div>
+                    <OpacitySlider label={t("canvas.toolbar.backgroundOpacity")} value={backgroundOpacity} onChange={onBackgroundOpacityChange} />
+                    <OpacitySlider label={t("canvas.toolbar.fontOpacity")} value={fontOpacity} onChange={onFontOpacityChange} />
+                    <OpacitySlider label={t("canvas.toolbar.nodeOpacity")} value={nodeOpacity} onChange={onNodeOpacityChange} />
                     <div className="mt-3 flex items-center justify-between gap-3 rounded-lg px-1.5 py-1">
                         <span className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-medium opacity-65">
                             <Info className="size-3.5" />
@@ -264,6 +319,26 @@ export function CanvasToolbar({
                     </div>
                 </div>
             ) : null}
+        </div>
+    );
+}
+
+/**
+ * 画布外观 - 透明度滑杆（0~100%）。
+ * 点击右侧百分比数字可一键复位为 100%，避免用户一点点拖回去。
+ */
+function OpacitySlider({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+    const { t } = useTranslation();
+    const percent = Math.round(Math.min(Math.max(value, 0), 1) * 100);
+    return (
+        <div className="mt-2.5 grid gap-0.5 px-1">
+            <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-medium opacity-50">{label}</span>
+                <button type="button" className="rounded px-1 text-[11px] font-medium tabular-nums opacity-70 transition hover:opacity-100" title={t("canvas.toolbar.resetOpacity")} onClick={() => onChange(1)}>
+                    {percent}%
+                </button>
+            </div>
+            <Slider className="!mx-0" min={0} max={100} step={1} value={percent} onChange={(next) => onChange((Array.isArray(next) ? next[0] : next) / 100)} />
         </div>
     );
 }

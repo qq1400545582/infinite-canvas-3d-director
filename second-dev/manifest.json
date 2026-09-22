@@ -1,0 +1,142 @@
+{
+    "version": 1,
+    "description": "无限画布二次开发分离层：声明本仓库相对上游 basketikun/infinite-canvas 的二开范围，供在线更新器据此保护二开内容。",
+    "baseVersion": "v0.19.0",
+    "protected": [
+        "plugins/canvas/jlmlh-3d-director/",
+        "plugins/canvas/openreel-video/",
+        "web/public/jlmlh-3d-director/",
+        "web/public/openreel-video/",
+        "web/public/plugins/",
+        "web/src/pages/expert-library/",
+        "web/src/lib/agent/composer-callables.ts",
+        "web/src/lib/canvas/plugin-manager-tabs.ts",
+        "web/vite-plugins/",
+        "web/src/components/layout/online-update-panel.tsx",
+        "scripts/",
+        "second-dev/"
+    ],
+    "excluded": [
+        "_jlmlh-extract/",
+        "_jlmlh.tar.gz",
+        "web/tsconfig.tsbuildinfo",
+        ".git/",
+        ".git.broken-backup-2026-09-17/",
+        ".update-cache/",
+        ".update-backup/",
+        ".tmp-openreel/",
+        ".tmp-zh/",
+        ".tmp-update/"
+    ],
+    "merge": {
+        "strategy": "three-way",
+        "conflict": "ours",
+        "note": "侵入文件（本地上游文件被二开改过）按 base/ours/theirs 三方合并；冲突块一律保留本地二开版本，并写入 .update-cache/last-report.json。"
+    },
+    "assertions": {
+        "files": [
+            "web/src/pages/expert-library/index.tsx",
+            "web/src/pages/expert-library/invoke.ts",
+            "web/src/pages/expert-library/invoke-mode.tsx",
+            "web/src/pages/expert-library/agent-launcher.tsx",
+            "web/src/pages/expert-library/plugin-manager-tabs.tsx",
+            "web/src/pages/expert-library/composer-callables.tsx",
+            "web/src/lib/agent/composer-callables.ts",
+            "web/src/lib/canvas/plugin-manager-tabs.ts",
+            "plugins/canvas/jlmlh-3d-director/src/index.tsx",
+            "plugins/canvas/jlmlh-3d-director/src/media-bridge.ts",
+            "plugins/canvas/openreel-video/src/i18n-zh.ts",
+            "web/public/jlmlh-3d-director/index.html",
+            "web/public/openreel-video/index.html",
+            "web/vite-plugins/online-update.ts",
+            "web/src/components/layout/online-update-panel.tsx"
+        ],
+        "contains": [
+            {
+                "file": "web/src/router.tsx",
+                "text": "@/pages/expert-library",
+                "label": "专家库路由"
+            },
+            {
+                "file": "web/src/constant/navigation-tools.ts",
+                "text": "\"experts\"",
+                "label": "导航入口"
+            },
+            {
+                "file": "web/src/i18n/locales/zh-CN.ts",
+                "text": "expertLibrary:",
+                "label": "中文文案"
+            },
+            {
+                "file": "web/src/i18n/locales/en-US.ts",
+                "text": "expertLibrary:",
+                "label": "英文文案"
+            },
+            {
+                "file": "web/src/components/canvas/canvas-plugin-manager-modal.tsx",
+                "text": "getPluginManagerTabs",
+                "label": "插件管理器扩展点"
+            },
+            {
+                "file": "web/src/components/canvas/canvas-create-menus.tsx",
+                "text": "useNodeRegistryVersion",
+                "label": "创建菜单动态刷新"
+            },
+            {
+                "file": "web/src/lib/canvas/plugin-loader.ts",
+                "text": "ensurePluginsLoaded",
+                "label": "本地插件加载"
+            },
+            {
+                "file": "web/src/components/agent/agent-chat-prompt-input.tsx",
+                "text": "searchComposerCallables",
+                "label": "输入框可调用项"
+            },
+            {
+                "file": "plugins/canvas/registry/build.mjs",
+                "text": "jlmlh-3d-director",
+                "label": "3D 导演台登记"
+            },
+            {
+                "file": "plugins/canvas/registry/build.mjs",
+                "text": "openreel-video",
+                "label": "OpenReel 登记"
+            },
+            {
+                "file": "web/vite.config.ts",
+                "text": "onlineUpdate",
+                "label": "在线更新中间件注册"
+            },
+            {
+                "file": "web/src/components/layout/version-release-modal.tsx",
+                "text": "OnlineUpdatePanel",
+                "label": "在线更新面板挂载"
+            },
+            {
+                "file": "web/src/i18n/locales/zh-CN.ts",
+                "text": "version:",
+                "label": "版本文案命名空间"
+            }
+        ],
+        "minCounts": {
+            "plugins/canvas/jlmlh-3d-director/": 80,
+            "plugins/canvas/openreel-video/": 1000,
+            "web/public/jlmlh-3d-director/": 4,
+            "web/public/openreel-video/": 200,
+            "web/src/pages/expert-library/": 20,
+            "web/vite-plugins/": 1
+        }
+    },
+    "postApply": [
+        {
+            "cwd": "plugins/canvas/jlmlh-3d-director",
+            "command": "node build.mjs",
+            "output": "web/public/plugins/jlmlh-3d-director.js"
+        },
+        {
+            "cwd": "plugins/canvas/openreel-video",
+            "command": "node build.mjs",
+            "output": "web/public/plugins/openreel-video.js"
+        }
+    ]
+}

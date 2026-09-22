@@ -1,0 +1,19 @@
+{
+    "name": "canvas-plugin-openreel-video",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "description": "Infinite Canvas 节点插件 — 以同源 iframe 内嵌 OpenReel 浏览器端专业视频编辑器",
+    "scripts": {
+        "build": "node build.mjs",
+        "build:app": "node build-app.mjs",
+        "dev": "node build.mjs --watch",
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@infinite-canvas/plugin-sdk": "file:../sdk",
+        "@types/react": "19.1.12",
+        "esbuild": "^0.25.0",
+        "typescript": "^5"
+    }
+}

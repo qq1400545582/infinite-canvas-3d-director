@@ -24,6 +24,19 @@ const OFFICIAL = [
     // 本插件只做 iframe + postMessage 桥接。除本 bundle 外，还需先 `npm run build:app`
     // 把导演台构建到 web/public/jlmlh-3d-director/（同源静态资源，随仓库提交）。
     { id: "jlmlh-3d-director", dir: "jlmlh-3d-director", name: "3D 导演台节点", description: "在画布内嵌 jlmlh-3d-director 三维导演台:模型导入、机位管理、时间线动画、截图导出到画布", icon: "🎬" },
+    // OpenReel：以同源 iframe 内嵌 OpenReel 浏览器端专业视频编辑器（app/ 下 vendor 的源码逻辑不改，
+    // 仅 vite base 改为相对路径以便嵌入 /openreel-video/ 子路径）。除本 bundle 外，还需先
+    // `npm run build:app` 把编辑器构建到 web/public/openreel-video/（同源静态资源，随仓库提交）。
+    { id: "openreel-video", dir: "openreel-video", name: "OpenReel 视频编辑器", description: "在画布内嵌 OpenReel 浏览器端专业视频编辑器:时间线剪辑、转场、滤镜、字幕、ffmpeg 导出", icon: "🎬" },
+    // 白模预演台：以同源 iframe 内嵌 mangfufu/director-desk（纯前端 Three.js SPA，无 React / 无后端 / 无宿主桥接协议），
+    // 本插件只做 iframe 容器 + 重载按钮（与 jlmlh-3d-director 同策略）。除本 bundle 外，还需先
+    // `npm run build:app` 把构建产物放到 web/public/director-desk/（同源静态资源，随仓库提交）。
+    { id: "director-desk", dir: "director-desk", name: "白模预演台节点", description: "在画布内嵌 DirectorDesk 白模预演台:glTF/GLB 导入、机位与灯光布置、实时白模预览", icon: "🏗️" },
+    // 分镜工作台：把开源 Skill「cinematic-storyboard-design」(TanShilongMario/clipshot, MIT) 的提示词与规范
+    // 逐字内联进节点（见 clipshot/src/prompts.ts，由 tools/gen-prompts.mjs 生成），运行时用宿主注入的
+    // ctx.ai 驱动文本模型拆镜头 + 图像模型出制作型分镜总图。分镜格数可自定义（默认 3×3 九宫格），
+    // 逐格提示词写进节点 metadata，由下游「分镜出图」节点按分镜序列逐格出图。纯节点实现，无 iframe、无静态产物需同步。
+    { id: "clipshot", dir: "clipshot", name: "分镜工作台节点", description: "按 clipshot Skill 规范把剧本拆成可自定义格数（默认九宫格）的制作型分镜与时间线镜头表，并可连接下游节点按分镜序列逐格出图", icon: "🎬" },
 ];
 
 // 读取插件 package.json 的 version 作为清单版本的唯一来源

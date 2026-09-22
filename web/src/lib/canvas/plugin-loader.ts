@@ -73,15 +73,23 @@ export async function updatePlugin(record: InstalledPlugin) {
 }
 
 export async function setPluginEnabled(record: InstalledPlugin, enabled: boolean) {
-    usePluginStore.getState().setEnabled(record.id, enabled);
     if (!enabled) {
         deactivatePlugin(record.id);
+        usePluginStore.getState().setEnabled(record.id, false);
         return;
     }
-    // Reload local plugins from their URL when enabled because the cached source may be stale.
-    const source = record.local ? await fetchPluginSource(withCacheBust(record.url)) : record.source;
-    const plugin = await evaluatePluginSource(source);
-    activatePlugin(plugin);
+    try {
+        // Commit the switch only after the node definitions are actually available.
+        const source = record.local ? await fetchPluginSource(withCacheBust(record.url)) : record.source;
+        const plugin = await evaluatePluginSource(source);
+        deactivatePlugin(record.id);
+        activatePlugin(plugin);
+        usePluginStore.getState().setEnabled(record.id, true);
+    } catch (error) {
+        deactivatePlugin(record.id);
+        usePluginStore.getState().setEnabled(record.id, false);
+        throw error; // The manager displays the error; the switch remains available for retry.
+    }
 }
 
 export function uninstallPlugin(id: string) {
@@ -89,22 +97,36 @@ export function uninstallPlugin(id: string) {
     usePluginStore.getState().remove(id);
 }
 
-let loaded = false;
+let loading: Promise<void> | null = null;
 
-// Load installed and enabled plugins at application startup.
-export async function ensurePluginsLoaded() {
-    if (loaded) return;
-    loaded = true;
+// Concurrent canvas mounts share initialization instead of returning before registration.
+export function ensurePluginsLoaded(): Promise<void> {
+    if (!loading) {
+        loading = loadInstalledPlugins().catch((error) => {
+            loading = null;
+            throw error;
+        });
+    }
+    return loading;
+}
+
+async function loadInstalledPlugins() {
     await usePluginStore.persist.rehydrate();
-    await loadLocalPlugins(); // Discover disabled local plugins first, then activate all enabled records.
+    const discovered = await loadLocalPlugins();
     const records = usePluginStore.getState().plugins.filter((record) => record.enabled);
     await Promise.all(
         records.map(async (record) => {
             try {
-                // Local plugins use the latest output; other plugins use their cached source.
-                const source = record.local ? await fetchPluginSource(withCacheBust(record.url)) : record.source;
-                activatePlugin(await evaluatePluginSource(source));
+                // Reuse this startup's validated local module: do not download it twice.
+                const plugin = discovered.get(record.id) ?? await evaluatePluginSource(
+                    record.local ? await fetchPluginSource(withCacheBust(record.url)) : record.source,
+                );
+                // Respect a toggle/uninstall that occurred while loading.
+                if (!usePluginStore.getState().plugins.some((item) => item.id === record.id && item.enabled)) return;
+                activatePlugin(plugin);
             } catch (error) {
+                deactivatePlugin(record.id);
+                usePluginStore.getState().setEnabled(record.id, false);
                 console.error(`[plugin] Failed to load: ${record.id}`, error);
             }
         }),
@@ -112,25 +134,36 @@ export async function ensurePluginsLoaded() {
     await loadDevPlugins();
 }
 
+// Self-developed local plugins enabled automatically on first discovery so the canvas works
+// out of the box on web/desktop builds. Existing user toggles are always preserved via `existing?.enabled`.
+const PRESET_ENABLED_LOCAL_PLUGINS = new Set<string>([
+    "clipshot-run",
+    "director-desk",
+    "jlmlh-3d-director",
+    "openreel-video",
+]);
+
 // Discover local plugins from web/public/plugins, add them disabled, and expose them in the manager without a URL.
 // Refresh metadata and source for existing records while preserving the enabled flag so persisted versions stay current.
 async function loadLocalPlugins() {
+    const discovered = new Map<string, CanvasPlugin>();
     let urls: unknown;
     try {
         const response = await fetch("/plugins/index.json");
-        if (!response.ok) return;
+        if (!response.ok) return discovered;
         urls = await response.json();
     } catch {
-        return; // Skip when no local manifest exists, such as production builds without plugins.
+        return discovered; // No local manifest, such as production builds without plugins.
     }
-    if (!Array.isArray(urls) || !urls.length) return;
-    const store = usePluginStore.getState();
+    if (!Array.isArray(urls) || !urls.length) return discovered;
     await Promise.all(
         urls.map(async (url: string) => {
             try {
                 const source = await fetchPluginSource(withCacheBust(url));
                 const plugin = await evaluatePluginSource(source);
+                const store = usePluginStore.getState();
                 const existing = store.plugins.find((item) => item.id === plugin.id);
+                discovered.set(plugin.id, plugin);
                 store.upsert({
                     id: plugin.id,
                     name: plugin.name || plugin.id,
@@ -138,7 +171,7 @@ async function loadLocalPlugins() {
                     description: plugin.description,
                     url,
                     source,
-                    enabled: existing?.enabled ?? false, // Preserve the user setting; new discoveries default to disabled.
+                    enabled: existing?.enabled ?? PRESET_ENABLED_LOCAL_PLUGINS.has(plugin.id), // Preserve the user setting; preset self-developed plugins enable on first discovery.
                     local: true,
                 });
             } catch (error) {
@@ -146,6 +179,7 @@ async function loadLocalPlugins() {
             }
         }),
     );
+    return discovered;
 }
 
 // During local development, refetch VITE_DEV_PLUGINS URLs without caching or persistence on every startup.

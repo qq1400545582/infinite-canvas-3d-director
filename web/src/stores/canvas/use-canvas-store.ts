@@ -4,7 +4,7 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { localForageStorage } from "@/lib/localforage-storage";
-import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
+import { CANVAS_DEFAULT_BACKGROUND_OPACITY, CANVAS_DEFAULT_FONT_OPACITY, CANVAS_DEFAULT_NODE_OPACITY, type CanvasBackgroundMedia, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, ViewportTransform } from "@/types/canvas";
 
 export type CanvasProject = {
@@ -18,6 +18,14 @@ export type CanvasProject = {
     activeChatId: string | null;
     backgroundMode: CanvasBackgroundMode;
     showImageInfo: boolean;
+    /** 画布外观 - 自定义背景图片/视频 */
+    backgroundMedia?: CanvasBackgroundMedia | null;
+    /** 画布外观 - 背景媒体透明度 0~1 */
+    backgroundOpacity?: number;
+    /** 画布外观 - 节点上文字透明度 0~1 */
+    fontOpacity?: number;
+    /** 画布外观 - 节点卡面（底色/边框/媒体内容）透明度 0~1 */
+    nodeOpacity?: number;
     viewport: ViewportTransform;
 };
 
@@ -36,7 +44,7 @@ type CanvasStore = {
     renameProject: (id: string, title: string) => void;
     deleteProjects: (ids: string[]) => void;
     replaceProjects: (projects: CanvasProject[], deletedProjects?: CanvasDeletedProject[]) => void;
-    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
+    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "backgroundMedia" | "backgroundOpacity" | "fontOpacity" | "nodeOpacity" | "viewport">>) => void;
 };
 
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
@@ -86,6 +94,10 @@ export const useCanvasStore = create<CanvasStore>()(
                     activeChatId: null,
                     backgroundMode: "lines",
                     showImageInfo: false,
+                    backgroundMedia: null,
+                    backgroundOpacity: CANVAS_DEFAULT_BACKGROUND_OPACITY,
+                    fontOpacity: CANVAS_DEFAULT_FONT_OPACITY,
+                    nodeOpacity: CANVAS_DEFAULT_NODE_OPACITY,
                     viewport: initialViewport,
                 };
                 set((state) => ({ projects: [project, ...state.projects] }));
@@ -104,6 +116,10 @@ export const useCanvasStore = create<CanvasStore>()(
                     activeChatId: source.activeChatId || null,
                     backgroundMode: source.backgroundMode || "lines",
                     showImageInfo: source.showImageInfo || false,
+                    backgroundMedia: source.backgroundMedia || null,
+                    backgroundOpacity: source.backgroundOpacity ?? CANVAS_DEFAULT_BACKGROUND_OPACITY,
+                    fontOpacity: source.fontOpacity ?? CANVAS_DEFAULT_FONT_OPACITY,
+                    nodeOpacity: source.nodeOpacity ?? CANVAS_DEFAULT_NODE_OPACITY,
                     viewport: source.viewport || initialViewport,
                 };
                 set((state) => ({ projects: [project, ...state.projects] }));

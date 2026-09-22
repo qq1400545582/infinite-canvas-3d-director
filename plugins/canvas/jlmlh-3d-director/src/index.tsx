@@ -1,252 +1,178 @@
-import {
-  definePlugin,
-  useEffect,
-  useRef,
-  useState,
-} from "@infinite-canvas/plugin-sdk";
+import { definePlugin, useEffect, useRef, useState } from "@infinite-canvas/plugin-sdk";
 import type { CanvasNodeContentProps } from "@infinite-canvas/plugin-sdk";
+import { exportCaptures, captureLiveView, exportVideoFromFrame, exportVideoNode, isImageUrl, publishCapture, readCaptures, upstreamBackground, type Capture } from "./media-bridge";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// 3D 导演台节点插件（薄桥接层）
-//
-// 设计要点：jlmlh-3d-director 原本是 React 18 + @react-three/fiber 8 的独立应用，
-// 而宿主画布是 React 19，且插件契约要求 React 为宿主单例（不得自带 React）。
-// 由于 R3F 8 仅支持 React 18，内联打包会破坏其渲染逻辑，因此这里采用 iframe 嵌入：
-//   · 导演台完整源码 vendor 在 app/ 下，功能逻辑一律不改；
-//   · 本插件只是把导演台以同源 iframe 嵌入节点内容区，并补齐宿主⇄导演台的
-//     postMessage 桥接（协议与 app/src/editor/io/hostBridge.ts 对齐）。
-// 这样「在节点插件里随意安装/关闭」由宿主插件管理器负责，导演台功能逻辑保持不变。
-// ─────────────────────────────────────────────────────────────────────────────
-
-// 注意：必须显式带 index.html。
-// Vite 开发服务器对 public/ 子目录的「目录 + 斜杠」请求不会解析到 index.html，
-// 而是被宿主 SPA 兜底接管（iframe 里会载入宿主画布本身）。
-// 显式文件名在 dev 与生产静态托管下行为一致。
-const APP_BASE = "/jlmlh-3d-director/";
-const APP_ENTRY = `${APP_BASE}index.html`;
-
-// 宿主侧监听的入站消息（与 app/src/editor/io/hostBridge.ts 的 handleHostMessage 对齐）
-type InboundMessage =
-  | { type: "storyai:director-desk-ready" }
-  | { type: "storyai:director-desk-close" }
-  | {
-      type: "storyai:director-desk-captures-sent";
-      payload: { captures: Array<{ dataUrl: string; fileName?: string }> };
-    }
-  | {
-      type: "storyai:director-desk-panorama-removed";
-      payload: { edgeId?: string; sourceNodeId?: string };
-    };
-
-// 宿主侧发出的出站消息（与 hostBridge 的 openHostSession / importHostPanorama 对齐）
-type OutboundMessage =
-  | { type: "storyai:director-desk-session"; payload: { instanceId: string; theme: "dark" | "light" } }
-  | {
-      type: "storyai:director-desk-panorama";
-      payload: { edgeId: string; sourceNodeId: string; imageUrl: string; fileName: string };
-    };
-
-// 读取宿主明暗主题：宿主在 <html> 上挂 "dark" class。
+// Official React 18/R3F application remains unchanged; host React 19 is never bundled.
+const APP_ENTRY = "/jlmlh-3d-director/index.html";
 function getHostTheme(): "dark" | "light" {
-  if (typeof document !== "undefined" && document.documentElement.classList.contains("dark")) {
-    return "dark";
-  }
-  return "light";
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
 }
-
-// 模块级注册表：toolbar 的「重载」按钮按 node id 找到对应 iframe 重新加载。
-const frameRegistry = new Map<string, HTMLIFrameElement>();
 
 function DirectorDeskContent({ ctx }: CanvasNodeContentProps) {
   const nodeId = ctx.node.id;
+  const latest = useRef(ctx);
+  latest.current = ctx;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [loadError, setLoadError] = useState(false);
-  const interactive =
-    (ctx.node.metadata as { interactive?: boolean } | undefined)?.interactive === true;
+  const [status, setStatus] = useState("");
+  const [captures, setCaptures] = useState<Capture[]>([]);
+  const [hovered, setHovered] = useState(false);
+  const [src] = useState(() => `${APP_ENTRY}?instanceId=${encodeURIComponent(nodeId)}&theme=${getHostTheme()}`);
 
   useEffect(() => {
     const frame = iframeRef.current;
     if (!frame) return;
-    frameRegistry.set(nodeId, frame);
-
     const origin = window.location.origin;
-    const target = frame.contentWindow;
-
-    const post = (msg: OutboundMessage) => target?.postMessage(msg, origin);
-
-    const sendSession = () =>
-      post({ type: "storyai:director-desk-session", payload: { instanceId: nodeId, theme: getHostTheme() } });
-
-    const sendUpstreamPanorama = () => {
-      const upstream = ctx.getUpstream();
-      for (const up of upstream) {
-        const content = up.metadata?.content;
-        if (typeof content === "string" && content) {
-          const connection = ctx
-            .getConnections()
-            .find((c) => c.fromNodeId === up.id && c.toNodeId === nodeId);
-          post({
-            type: "storyai:director-desk-panorama",
-            payload: {
-              edgeId: connection?.id ?? `${up.id}->${nodeId}`,
-              sourceNodeId: up.id,
-              imageUrl: content,
-              fileName: up.title || "画布全景图.png",
-            },
-          });
-          break; // 仅取第一个上游图片节点
+    const key = `storyai-3d-director-desk-demo:${nodeId}`;
+    let ready = false;
+    let backgroundKey = "";
+    let dismissedKey = "";
+    let snapshot: string | null = null;
+    let currentCaptures: Capture[] = [];
+    let currentOutput: Capture | undefined;
+    const post = (data: unknown) => frame.contentWindow?.postMessage(data, origin);
+    const sync = () => {
+      if (!ready) return;
+      const context = latest.current;
+      const background = upstreamBackground(context);
+      const signature = background ? JSON.stringify(background) : "";
+      if (!background) { backgroundKey = ""; dismissedKey = ""; }
+      else if (signature !== backgroundKey && signature !== dismissedKey) {
+        post({ type: "storyai:director-desk-panorama", payload: background });
+        backgroundKey = signature;
+      }
+      // Read only this iframe instance's official persisted captures. No vendor store mutation.
+      try {
+        const raw = window.localStorage.getItem(key);
+        if (raw !== snapshot) {
+          snapshot = raw;
+          const next = readCaptures(raw);
+          const added = next.filter((cap) => !currentCaptures.some((old) => old.id === cap.id && old.dataUrl === cap.dataUrl));
+          if (added.length) currentOutput = added[added.length - 1];
+          currentCaptures = next;
+          setCaptures(next);
         }
+      } catch { /* Storage disabled/full: explicit official send-to-canvas still works. */ }
+      if (currentOutput) publishCapture(context, currentOutput);
+      else {
+        const content = context.getNode(nodeId)?.metadata?.content;
+        if (isImageUrl(content)) publishCapture(context, { dataUrl: content });
       }
     };
-
     const onMessage = (event: MessageEvent) => {
-      // 同源校验（导演台 hostBridge 同样按 origin 校验入站消息）
-      if (event.origin !== origin) return;
-      if (event.source !== target) return;
-      const data = event.data as InboundMessage | undefined;
-      if (!data || typeof data.type !== "string") return;
-
-      if (data.type === "storyai:director-desk-ready") {
-        // 应用挂载完成并已注册 bridge 监听，此刻回送会话（含实例隔离 id 与主题）
-        sendSession();
-        sendUpstreamPanorama();
-        return;
+      if (event.origin !== origin || event.source !== frame.contentWindow) return;
+      const data = event.data;
+      if (data?.type === "storyai:director-desk-ready") {
+        if (ready) return; // Never reset a live scene by sending the session repeatedly.
+        ready = true;
+        post({ type: "storyai:director-desk-session", payload: { instanceId: nodeId, theme: getHostTheme() } });
+        sync();
+      } else if (data?.type === "storyai:director-desk-captures-sent") {
+        const batch = Array.isArray(data.payload?.captures)
+          ? data.payload.captures.filter((cap: Capture) => cap && isImageUrl(cap.dataUrl)) : [];
+        if (batch.length) {
+          currentOutput = batch[batch.length - 1];
+          exportCaptures(latest.current, batch);
+          setStatus(`已导出 ${batch.length} 张到画布`);
+        }
+      } else if (data?.type === "storyai:director-desk-panorama-removed") {
+        // Respect manual removal inside the editor, instead of importing it again each tick.
+        const background = upstreamBackground(latest.current);
+        if (background?.edgeId === data.payload?.edgeId) dismissedKey = JSON.stringify(background);
       }
-
-      if (data.type === "storyai:director-desk-captures-sent") {
-        const captures = data.payload?.captures ?? [];
-        if (captures.length === 0) return;
-        const startX = ctx.node.position.x + ctx.node.width + 48;
-        const startY = ctx.node.position.y;
-        const ops = captures.map((cap, i) => ({
-          type: "add_node" as const,
-          nodeType: "image" as const,
-          title: cap.fileName || `导演台截图 ${i + 1}`,
-          position: { x: startX, y: startY + i * 200 },
-          width: 360,
-          height: 360,
-          metadata: { content: cap.dataUrl, freeResize: true },
-        }));
-        // 把最后一张写回本节点，供下游节点引用（resource 返回它）
-        ctx.updateMetadata({ content: captures[captures.length - 1].dataUrl });
-        ctx.applyOps(ops);
-        return;
-      }
-
-      // storyai:director-desk-close / storyai:director-desk-panorama-removed 暂无需宿主处理
     };
-
+    const onLoad = () => { ready = false; backgroundKey = ""; dismissedKey = ""; };
+    // ready normally occurs before iframe load: do not clear ready in the load event.
+    // Reload requests below create a fresh component via iframe navigation and its ready message.
+    const onStorage = (event: StorageEvent) => { if (event.key === key) sync(); };
     window.addEventListener("message", onMessage);
+    window.addEventListener("storage", onStorage);
+    const timer = window.setInterval(sync, 1000);
+    const reset = () => { onLoad(); frame.src = frame.src; };
+    reloadRegistry.set(nodeId, reset);
     return () => {
+      window.clearInterval(timer);
       window.removeEventListener("message", onMessage);
-      if (frameRegistry.get(nodeId) === frame) frameRegistry.delete(nodeId);
+      window.removeEventListener("storage", onStorage);
+      reloadRegistry.delete(nodeId);
     };
-    // 位置/尺寸变化时重新绑定，使截图落点跟随节点；ctx 的 host 回调本身是稳定的
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeId, ctx.node.position.x, ctx.node.position.y, ctx.node.width]);
+  }, [nodeId]);
 
-  const src = `${APP_ENTRY}?instanceId=${encodeURIComponent(nodeId)}&theme=${getHostTheme()}`;
+  const [exporting, setExporting] = useState(false);
+
+  const [exportKind, setExportKind] = useState("image");
+  const exportController = useRef<AbortController | null>(null);
+  useEffect(() => () => exportController.current?.abort(), []);
+
+  const exportAll = async () => {
+    if (exportController.current) return;
+    const controller = new AbortController();
+    exportController.current = controller;
+    setExporting(true);
+    setStatus("正在导出…");
+    let imageCount = 0;
+    try {
+      if (exportKind !== "video") {
+        let batch = captures;
+        try { batch = readCaptures(window.localStorage.getItem(`storyai-3d-director-desk-demo:${nodeId}`)); } catch { /* fallback */ }
+        if (!batch.length) {
+          const live = captureLiveView(iframeRef.current);
+          batch = live ? [live] : [];
+        }
+        if (!batch.length) throw new Error("未找到画面，请在导演台中先加载场景");
+        if (!exportCaptures(latest.current, batch)) throw new Error("没有可导出的图片");
+        imageCount = batch.length;
+        setStatus(`已导出 ${imageCount} 张图片到画布`);
+      }
+      if (exportKind !== "image") {
+        setStatus(`${imageCount ? `已导出 ${imageCount} 张图片；` : ""}正在生成时间轴视频…`);
+        const video = await exportVideoFromFrame(iframeRef.current, controller.signal);
+        if (controller.signal.aborted) return;
+        exportVideoNode(latest.current, video, imageCount);
+        setStatus(`已导出${imageCount ? ` ${imageCount} 张图片和` : ""} 1 个视频到画布`);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) setStatus(`${imageCount ? `已导出 ${imageCount} 张图片；` : ""}${error instanceof Error ? error.message : "导出失败，请重试"}`);
+    } finally {
+      exportController.current = null;
+      if (!controller.signal.aborted) setExporting(false);
+    }
+  };
 
   return (
-    <div
-      data-canvas-no-zoom
-      style={{
-        position: "relative",
-        width: "100%",
-        height: "100%",
-        overflow: "hidden",
-        borderRadius: 16,
-        background: "#090909",
-      }}
-    >
-      {loadError ? (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "grid",
-            placeItems: "center",
-            color: "#e2e8f0",
-            fontSize: 13,
-            textAlign: "center",
-            padding: 24,
-            background: "#0b0b0b",
-          }}
-        >
-          3D 导演台加载失败：请先构建并将产物放到 {APP_BASE}
-        </div>
-      ) : (
-        <iframe
-          ref={iframeRef}
-          src={src}
-          title="3D 导演台"
-          onError={() => setLoadError(true)}
-          allow="autoplay; fullscreen"
-          style={{
-            width: "100%",
-            height: "100%",
-            border: "none",
-            display: "block",
-            background: "#090909",
-          }}
-        />
-      )}
-
-      {!interactive && !loadError ? (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "grid",
-            placeItems: "center",
-            pointerEvents: "none",
-            color: "#cbd5e1",
-            fontSize: 13,
-            textAlign: "center",
-            background: "rgba(9,9,9,0.55)",
-          }}
-        >
-          点击节点上的「交互」按钮以操作 3D 导演台
-        </div>
-      ) : null}
+    <div data-canvas-no-zoom onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)}
+      style={{ position: "relative", width: "100%", height: "100%", borderRadius: 16, overflow: "hidden",
+        outline: "2px solid #2f80ff", outlineOffset: -2,
+        boxShadow: hovered || ctx.isSelected ? "0 0 0 4px rgba(47,128,255,.25), 0 0 22px rgba(47,128,255,.35)" : "0 0 12px rgba(47,128,255,.18)" }}>
+      <div style={{ height: 34, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 10px",
+        background: ctx.theme.node.panel, color: ctx.theme.node.text, fontSize: 12 }}>
+        <span role="status">{status || "上游图片自动同步 · 截图供下游引用"}</span>
+        <select aria-label="导出内容" value={exportKind} disabled={exporting} onChange={(event) => setExportKind(event.target.value)}
+          style={{ marginLeft: "auto", marginRight: 8, background: ctx.theme.node.panel, color: "inherit", border: "1px solid #2f80ff", borderRadius: 4 }}>
+          <option value="image">图片</option><option value="video">视频（上帝视角）</option><option value="both">图片和视频</option>
+        </select>
+        <button type="button" onClick={() => void exportAll()} disabled={exporting} style={{ cursor: exporting ? "wait" : "pointer", padding: "3px 9px", borderRadius: 6,
+          border: "1px solid #2f80ff", background: "transparent", color: "inherit", opacity: exporting ? 0.6 : 1 }}>一键导出到画布</button>
+      </div>
+      {loadError ? <div role="alert" style={{ padding: 20 }}>3D 导演台加载失败，请重新加载插件。</div> :
+        <iframe ref={iframeRef} src={src} title="3D 导演台" onError={() => setLoadError(true)} allow="autoplay; fullscreen"
+          style={{ width: "100%", height: "calc(100% - 34px)", border: "none", display: "block" }} />}
     </div>
   );
 }
-
+const reloadRegistry = new Map<string, () => void>();
 export default definePlugin({
-  id: "jlmlh-3d-director",
-  name: "3D 导演台节点",
-  version: "1.0.0",
-  description: "在画布内嵌 jlmlh-3d-director 三维导演台：模型导入、机位管理、时间线动画、截图导出到画布",
-  nodes: [
-    {
-      type: "jlmlh-3d-director:scene",
-      title: "3D 导演台",
-      icon: "🎬",
-      description: "三维导演工作台（对象 / 机位 / 时间线 / 截图）",
-      defaultSize: { width: 760, height: 520 },
-      defaultMetadata: {},
-      minimapColor: "#7c3aed",
-      // 宿主自动加「交互 ⇄ 移动」开关：默认移动（拖动节点），切到交互后可用导演台
-      interactionToggle: true,
-      // 把最近一次截图作为本节点资源输出，供下游节点引用
-      resource: (node) => {
-        const content = node.metadata?.content;
-        return typeof content === "string" && content ? { kind: "image", url: content } : null;
-      },
-      Content: DirectorDeskContent,
-      toolbar: (ctx) => [
-        {
-          id: "reload",
-          title: "重新加载 3D 导演台",
-          label: "重载",
-          icon: "🔄",
-          onClick: () => {
-            const frame = frameRegistry.get(ctx.node.id);
-            if (frame) frame.src = frame.src; // 重新加载 iframe
-          },
-        },
-      ],
-    },
-  ],
+  id: "jlmlh-3d-director", name: "3D 导演台节点", version: "1.0.0",
+  description: "三维导演台：上游背景同步、机位与时间线、截图自动输出及一键导出画布",
+  nodes: [{
+    type: "jlmlh-3d-director:scene", title: "3D 导演台", icon: "3D",
+    description: "三维导演工作台（对象 / 机位 / 时间线 / 截图）",
+    defaultSize: { width: 760, height: 520 }, defaultMetadata: {}, minimapColor: "#7c3aed",
+    hasSourceHandle: true,
+    interactionToggle: false, // Always interactive, including after content is populated. Drag by the host title bar.
+    resource: (node) => isImageUrl(node.metadata?.content) ? { kind: "image", url: node.metadata.content } : null,
+    Content: DirectorDeskContent,
+    toolbar: (ctx) => [{ id: "reload", title: "重新加载 3D 导演台", label: "重载", icon: "↻",
+      onClick: () => reloadRegistry.get(ctx.node.id)?.() }],
+  }],
 });

@@ -1,0 +1,66 @@
+{
+    "name": "infinite-canvas-desktop",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Infinite Canvas 桌面壳：本机 HTTP 服务（127.0.0.1）+ WebView，复用 web/ 前端与插件，提供一键启动后端、三层更新与离线回退。",
+    "main": "out/main.js",
+    "author": "infinite-canvas",
+    "scripts": {
+        "dev": "electron-vite dev",
+        "build": "electron-vite build",
+        "build:web": "node scripts/build-web.mjs",
+        "preview": "electron-vite preview",
+        "package": "npm run build:web && npm run build && electron-builder",
+        "typecheck": "tsc --noEmit -p tsconfig.json"
+    },
+    "dependencies": {
+        "electron-updater": "^6.3.9"
+    },
+    "devDependencies": {
+        "electron": "^33.2.0",
+        "electron-builder": "^25.1.8",
+        "electron-vite": "^2.3.0",
+        "typescript": "^5.6.0",
+        "@types/node": "^20.14.0"
+    },
+    "build": {
+        "appId": "com.infinite-canvas.desktop",
+        "productName": "Infinite Canvas",
+        "directories": {
+            "output": "dist-electron-builder"
+        },
+        "files": [
+            "out/**/*",
+            "package.json"
+        ],
+        "extraResources": [
+            {
+                "from": "resources/web-dist",
+                "to": "web-dist"
+            }
+        ],
+        "publish": [
+            {
+                "provider": "github",
+                "owner": "basketikun",
+                "repo": "infinite-canvas",
+                "releaseType": "release"
+            }
+        ],
+        "win": {
+            "target": [
+                {
+                    "target": "nsis",
+                    "arch": "x64"
+                }
+            ]
+        },
+        "mac": {
+            "target": ["dmg"]
+        },
+        "linux": {
+            "target": ["AppImage"]
+        }
+    }
+}

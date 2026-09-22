@@ -1,0 +1,18 @@
+{
+    "name": "canvas-plugin-clipshot",
+    "version": "1.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Infinite Canvas 分镜工作台节点插件 (clipshot) — 内置 cinematic-storyboard-design Skill：可自定义格数的分镜工作台 + 按分镜序列逐格出图的下游节点",
+    "scripts": {
+        "build": "node build.mjs",
+        "dev": "node build.mjs --watch",
+        "gen:prompts": "node tools/gen-prompts.mjs",
+        "typecheck": "tsc --noEmit"
+    },
+    "devDependencies": {
+        "@infinite-canvas/plugin-sdk": "file:../sdk",
+        "@types/react": "19.1.12",
+        "typescript": "^5"
+    }
+}

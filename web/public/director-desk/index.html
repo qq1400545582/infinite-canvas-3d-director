@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101214" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>导演台 · AI 短剧预演</title>
+    <!-- director-desk 插件：允许宿主从画布捕获当前预览帧（「导出到画布」功能用）。
+         强制 WebGL 上下文保留绘制缓冲，使 canvas.toDataURL() 能拿到最新一帧。
+         仅改变 WebGL 上下文的保留缓冲语义，不改变渲染结果；Three.js 每帧仍正常清屏重绘。 -->
+    <script>
+      (function () {
+        try {
+          var orig = HTMLCanvasElement.prototype.getContext;
+          HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+            if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") {
+              attrs = Object.assign({}, attrs, { preserveDrawingBuffer: true });
+            }
+            return orig.call(this, type, attrs);
+          };
+        } catch (e) {}
+      })();
+    </script>
+    <script type="module" crossorigin src="./assets/index-C0VQvPQj.js"></script>
+    <link rel="modulepreload" crossorigin href="./assets/lens-projection-CHzVTabf.js">
+    <link rel="modulepreload" crossorigin href="./assets/model-JihazxaG.js">
+    <link rel="modulepreload" crossorigin href="./assets/actors-R7UQ-Y4j.js">
+    <link rel="stylesheet" crossorigin href="./assets/index-CYKJKs2I.css">
+  </head>
+  <body><div id="app"></div></body>
+</html>

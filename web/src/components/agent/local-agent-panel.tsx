@@ -184,6 +184,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     const attachmentUrlsRef = useRef(new Set<string>());
     const clientIdRef = useRef("");
     const [clientReady, setClientReady] = useState(false);
+    const [backendStarting, setBackendStarting] = useState(false);
     const loadThreadsSequenceRef = useRef(0);
     const threadMessagesRef = useRef(new Map<string, AgentChatItem[]>());
     const authoritativeHistoryTurnsRef = useRef(new Set<string>());
@@ -945,6 +946,52 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         setAgentState({ url: nextEndpoint, token: nextToken, enabled: true, connected: false, silentConnect: silent, fragmentBootstrap: false, activity: rt("connecting"), connectError: "", activeTab: "setup" });
     };
 
+    // 画布内「一键启动后端」：调用本地 dev server 的 /__canvas-agent 接口拉起 Agent 进程，
+    // 轮询直到就绪后用返回的 url+token 自动连接（零接触，小白无需输入命令）。
+    // 若 dev server 未提供该接口（如桌面构建），则退化为直接尝试连接（Agent 很可能已由宿主托管）。
+    const startBackend = useCallback(async () => {
+        if (backendStarting) return;
+        setBackendStarting(true);
+        const origin = window.location.origin;
+        try {
+            const startRes = await fetch(`${origin}/__canvas-agent/start`, { method: "POST" }).catch(() => null);
+            if (!startRes || !startRes.ok) {
+                setBackendStarting(false);
+                void toggleAgentConnection({ silent: true });
+                return;
+            }
+            let info: { url?: string; token?: string } | null = null;
+            for (let i = 0; i < 60; i++) {
+                const st = await fetch(`${origin}/__canvas-agent/status`).then((r) => r.json()).catch(() => null);
+                if (st && st.running) {
+                    info = { url: st.url, token: st.token };
+                    break;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+            }
+            setBackendStarting(false);
+            if (info && info.token) {
+                const nextUrl = (info.url || DEFAULT_AGENT_URL).trim().replace(/\/$/, "");
+                setAgentState({
+                    url: nextUrl,
+                    token: info.token,
+                    enabled: true,
+                    connected: false,
+                    silentConnect: true,
+                    fragmentBootstrap: true,
+                    confirmTools: false,
+                    activity: rt("connecting"),
+                    connectError: "",
+                    activeTab: "setup",
+                });
+            } else {
+                void toggleAgentConnection({ silent: true });
+            }
+        } catch {
+            setBackendStarting(false);
+        }
+    }, [backendStarting, rt, setAgentState, toggleAgentConnection]);
+
     useLayoutEffect(() => {
         const bootstrap = readAgentUrlBootstrap(hash);
         if (!bootstrap) return;
@@ -1369,6 +1416,8 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                     onUrlChange={(url) => setAgentState({ url, connectError: "" })}
                     onTokenChange={(token) => setAgentState({ token, connectError: "" })}
                     onToggleEnabled={toggleAgentConnection}
+                    onStartBackend={startBackend}
+                    backendStarting={backendStarting}
                 />
             ) : activeTab === "skills" ? (
                 <AgentSkillsView clientId={clientIdRef.current} />

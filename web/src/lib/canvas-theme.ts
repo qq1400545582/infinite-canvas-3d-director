@@ -1,5 +1,24 @@
 export type CanvasColorTheme = "light" | "dark";
 export type CanvasBackgroundMode = "dots" | "lines" | "blank";
+export type CanvasBackgroundKind = "image" | "video";
+
+/**
+ * 画布外观 - 自定义背景媒体。
+ * 只记录媒体仓库（IndexedDB: infinite-canvas / media_files）里的 storageKey，
+ * 不把二进制或 dataURL 写进工程数据，避免工程体积膨胀。
+ */
+export type CanvasBackgroundMedia = {
+    kind: CanvasBackgroundKind;
+    storageKey: string;
+    mimeType: string;
+    /** 原文件名，仅用于面板展示 */
+    name?: string;
+};
+
+/** 画布外观 - 透明度默认值（1 = 完全不透明，保持原有观感） */
+export const CANVAS_DEFAULT_BACKGROUND_OPACITY = 1;
+export const CANVAS_DEFAULT_FONT_OPACITY = 1;
+export const CANVAS_DEFAULT_NODE_OPACITY = 1;
 
 export const canvasThemes = {
     light: {
