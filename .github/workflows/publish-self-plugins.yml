@@ -1,0 +1,59 @@
+name: Publish Self-Hosted Plugin Registry
+
+# 把本仓库 web/public/plugins 下 4 个自研插件 bundle 与 official-plugins.json
+# 强推到 `plugins-dist-self` 孤儿分支，经 jsDelivr 分发为「自托管官方插件频道」。
+# 与上游 publish-plugins.yml（构建 9 个官方插件）相互独立、互不影响。
+#
+# 启用方式（二选一）：
+#   1) 在 Actions 页面手动 Run workflow；
+#   2) 打 `self-plugins-v*` 标签推送后自动触发。
+# 发布后在「渠道 / 官方插件」侧把前端环境变量 VITE_PLUGIN_REGISTRY_URL 指向：
+#   https://cdn.jsdelivr.net/gh/<owner>/<repo>@plugins-dist-self/official-plugins.json
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "self-plugins-v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-self-plugins
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate self-hosted registry + stage bundles
+        run: node scripts/generate-plugin-registry.mjs --copy ./registry-dist
+
+      - name: Publish to plugins-dist-self (orphan) branch
+        working-directory: registry-dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b plugins-dist-self
+          git add -A
+          git commit -q -m "publish self-hosted plugins @ ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" plugins-dist-self
+
+      - name: Output registry URL hint
+        run: |
+          echo "::notice::Set VITE_PLUGIN_REGISTRY_URL to:"
+          echo "::notice::https://cdn.jsdelivr.net/gh/${{ github.repository }}@plugins-dist-self/official-plugins.json"

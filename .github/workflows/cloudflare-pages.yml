@@ -1,0 +1,46 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.13"
+
+      - name: Install dependencies
+        working-directory: web
+        run: bun install
+
+      - name: Build
+        working-directory: web
+        run: bun run build
+        # VITE_BASE 保持默认 "/"（Cloudflare Pages 以根路径提供服务）；不要设置子路径。
+        # 不要执行 `cp web/dist/index.html web/dist/404.html`：
+        #   Cloudflare Pages 在无根级 404.html 时自动启用 SPA 回退，深层链接（如 /canvas/<id>）刷新不会 404。
+        #   一旦存在根级 404.html，自动 SPA 回退被关掉，反而会导致刷新 404。
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: infinite-canvas
+          directory: web/dist
+          branch: main
+          # 构建已在上方 CI 完成，故不传 buildCommand。
+          # 首次部署前需在 Cloudflare 控制台手动创建 Pages 项目（名称与 projectName 一致），
+          # 并将生产分支设为 main（与 branch 一致即为生产部署，否则为预览部署）。

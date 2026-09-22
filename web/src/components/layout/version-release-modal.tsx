@@ -4,6 +4,8 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useVersionCheck } from "@/hooks/use-version-check";
 import { APP_VERSION } from "@/constant/env";
+import { OnlineUpdatePanel } from "@/components/layout/online-update-panel";
+import { LayerVersionPanel } from "@/components/layout/layer-version-panel";
 
 function getTagColor(type: string) {
     if (type === "新增" || type === "Added") return "green";
@@ -61,6 +63,8 @@ export function VersionReleaseModal({ className, style }: VersionReleaseModalPro
                         <div className="mt-1 text-base font-semibold text-stone-950 dark:text-stone-100">{latestVersion}</div>
                     </div>
                 </div>
+                <OnlineUpdatePanel />
+                <LayerVersionPanel />
                 <div className="max-h-[56vh] overflow-y-auto pr-2">
                     <Timeline
                         items={releases.map((release) => ({

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 
-import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
+import { canvasThemes, type CanvasBackgroundKind, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ViewportTransform } from "@/types/canvas";
 
@@ -9,6 +9,15 @@ type InfiniteCanvasProps = {
     viewport: ViewportTransform;
     tool: "select" | "pan";
     backgroundMode?: CanvasBackgroundMode;
+    /** 画布外观 - 自定义背景媒体（已解析出的可显示 URL） */
+    backgroundMediaUrl?: string;
+    backgroundMediaKind?: CanvasBackgroundKind;
+    /** 画布外观 - 背景媒体透明度 0~1 */
+    backgroundOpacity?: number;
+    /** 画布外观 - 节点上文字透明度 0~1 */
+    fontOpacity?: number;
+    /** 画布外观 - 节点卡面透明度 0~1 */
+    nodeOpacity?: number;
     onViewportChange: (viewport: ViewportTransform) => void;
     onCanvasMouseDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
     onCanvasDeselect?: () => void;
@@ -18,8 +27,13 @@ type InfiniteCanvasProps = {
     children: React.ReactNode;
 };
 
-export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = "lines", onViewportChange, onCanvasMouseDown, onCanvasDeselect, onCanvasDoubleClick, onContextMenu, onDrop, children }: InfiniteCanvasProps) {
+export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = "lines", backgroundMediaUrl = "", backgroundMediaKind = "image", backgroundOpacity = 1, fontOpacity = 1, nodeOpacity = 1, onViewportChange, onCanvasMouseDown, onCanvasDeselect, onCanvasDoubleClick, onContextMenu, onDrop, children }: InfiniteCanvasProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    // 画布外观的可调项通过 CSS 变量下发给节点层，节点侧只在自身样式里引用变量，无需逐层透传 props。
+    const appearanceVars = {
+        "--canvas-node-opacity": String(nodeOpacity),
+        "--canvas-font-opacity": String(fontOpacity),
+    } as React.CSSProperties;
     const panState = useRef({
         isPanning: false,
         startX: 0,
@@ -211,7 +225,7 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         <div
             ref={containerRef}
             className="relative h-full w-full select-none overflow-hidden"
-            style={{ background: theme.canvas.background, cursor }}
+            style={{ background: theme.canvas.background, cursor, ...appearanceVars }}
             onPointerDown={handlePointerDown}
             onDoubleClick={handleDoubleClick}
             onWheel={handleWheel}
@@ -219,6 +233,7 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             onDragOver={(event) => event.preventDefault()}
             onDrop={onDrop}
         >
+            {backgroundMediaUrl ? <CanvasBackgroundMediaLayer url={backgroundMediaUrl} kind={backgroundMediaKind} opacity={backgroundOpacity} /> : null}
             <CanvasGrid viewport={viewport} mode={backgroundMode} />
             <div
                 className="absolute origin-top-left"
@@ -230,6 +245,16 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             </div>
         </div>
     );
+}
+
+/**
+ * 画布外观 - 自定义背景层（图片/视频，格式不限）。
+ * 固定铺满视口且不随画布平移缩放移动，纯展示层：pointer-events 关闭，不参与任何画布交互。
+ */
+function CanvasBackgroundMediaLayer({ url, kind, opacity }: { url: string; kind: CanvasBackgroundKind; opacity: number }) {
+    const style = { opacity: Math.min(Math.max(opacity, 0), 1) };
+    if (kind === "video") return <video className="pointer-events-none absolute inset-0 h-full w-full object-cover" style={style} src={url} autoPlay loop muted playsInline />;
+    return <div className="pointer-events-none absolute inset-0 bg-cover bg-center bg-no-repeat" style={{ ...style, backgroundImage: `url("${url.replace(/["\\]/g, "\\$&")}")` }} />;
 }
 
 function CanvasGrid({ viewport, mode }: { viewport: ViewportTransform; mode: CanvasBackgroundMode }) {

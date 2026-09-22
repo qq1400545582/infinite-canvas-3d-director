@@ -3,6 +3,7 @@ import { Popover } from "antd";
 import { Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { searchComposerCallables, type ComposerCallableItem } from "@/lib/agent/composer-callables";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { buildCanvasResourceReferences, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { isImeComposing, isPlainEnterKey } from "@/lib/keyboard-event";
@@ -13,7 +14,11 @@ import { AgentCanvasReferencePreview, canvasReferenceIcon, canvasReferenceKindLa
 import { agentInlineTokenClass, agentInlineTokenMediaClass, agentReferenceMarker, agentSkillMarker, parseAgentInlineTokens } from "./agent-chat-inline-tokens";
 
 type ComposerCommand = { type: "skill" | "resource"; query: string; length: number };
-type ComposerCandidate = { type: "skill"; skill: AgentSkillSummary } | { type: "resource"; reference: CanvasResourceReference };
+type ComposerCandidate =
+    | { type: "skill"; skill: AgentSkillSummary }
+    | { type: "resource"; reference: CanvasResourceReference }
+    // 「专家 / 技能 / 连接器」等可调用项（由各模块通过 composer-callables 扩展点注册）。
+    | { type: "callable"; item: ComposerCallableItem };
 type ReferenceHover = { reference: AgentCanvasReference; left: number; top: number; width: number; height: number };
 
 export function AgentChatPromptInput({ value, disabled, placeholder, theme, onChange, onSubmit, onAddFiles }: {
@@ -49,9 +54,12 @@ export function AgentChatPromptInput({ value, disabled, placeholder, theme, onCh
         if (!command) return [];
         const query = command.query.trim().toLowerCase();
         if (command.type === "skill") {
-            return skills
+            // `/` 同时列出「外部模块注册的可调用项」（专家 / 技能 / 连接器）与本机 Agent 的 Skill。
+            const callables: ComposerCandidate[] = searchComposerCallables(query).map((item) => ({ type: "callable", item }));
+            const matchedSkills: ComposerCandidate[] = skills
                 .filter((skill) => skill.enabled && (!query || [skill.name, skill.description, skill.interface?.displayName, skill.interface?.shortDescription, skill.shortDescription].some((item) => item?.toLowerCase().includes(query))))
                 .map((skill) => ({ type: "skill", skill }));
+            return [...callables, ...matchedSkills];
         }
         return resourceCandidates
             .filter((reference) => !selectedReferenceIds.has(reference.nodeId) && (!query || `${reference.label} ${reference.title} ${reference.kind} ${reference.text || ""}`.toLowerCase().includes(query)))
@@ -111,6 +119,15 @@ export function AgentChatPromptInput({ value, disabled, placeholder, theme, onCh
     const insertCandidate = (candidate: ComposerCandidate) => {
         const editor = editorRef.current;
         if (!editor || !command) return;
+        if (candidate.type === "callable") {
+            // 专家 / 技能 / 连接器：清掉已输入的 `/关键字`，再交给该条目自己的调用动作
+            // （专家库走 invokeInCanvas：预填调用提示并展开智能体面板）。
+            removeTextBeforeCaret(command.length);
+            emit(serializeEditor(editor));
+            closeCommand();
+            void candidate.item.run();
+            return;
+        }
         if (candidate.type === "skill") editor.querySelector<HTMLElement>("[data-agent-token-kind='skill']")?.remove();
         removeTextBeforeCaret(command.length);
 
@@ -249,21 +266,28 @@ function AgentCommandMenu({ command, candidates, activeIndex, loading, theme, on
     return (
         <div data-agent-command-menu className="absolute bottom-[calc(100%+8px)] left-0 z-[120] w-full min-w-64 overflow-hidden rounded-xl border shadow-xl" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }} onPointerDown={stopPropagation} onMouseDown={stopPropagation}>
             <div className="border-b px-3 py-2 text-xs" style={{ borderColor: theme.toolbar.border, color: theme.node.muted }}>
-                {t(command.type === "skill" ? "agent.composer.mentions.selectSkill" : "agent.composer.mentions.selectResource")}{command.query ? ` · ${command.query}` : ""}
+                {t(command.type === "skill" ? "agent.composer.mentions.selectCallable" : "agent.composer.mentions.selectResource")}{command.query ? ` · ${command.query}` : ""}
             </div>
             <div className="thin-scrollbar max-h-[min(21rem,52vh)] overflow-y-auto p-1">
                 {candidates.length ? candidates.map((candidate, index) => {
+                    const callable = candidate.type === "callable" ? candidate.item : null;
                     const skill = candidate.type === "skill" ? candidate.skill : null;
                     const reference = candidate.type === "resource" ? candidate.reference : null;
-                    const title = skill ? skill.interface?.displayName || skill.name : reference?.title || "";
-                    const description = skill ? skill.interface?.shortDescription || skill.shortDescription || skill.description : reference ? `${agentReferenceMarker(reference)} · ${canvasReferenceKindLabel(reference.kind)}` : "";
+                    const title = callable ? callable.label : skill ? skill.interface?.displayName || skill.name : reference?.title || "";
+                    const description = callable ? callable.description : skill ? skill.interface?.shortDescription || skill.shortDescription || skill.description : reference ? `${agentReferenceMarker(reference)} · ${canvasReferenceKindLabel(reference.kind)}` : "";
                     return (
-                        <button key={skill ? `${skill.name}:${skill.path}` : reference?.nodeId} ref={index === activeIndex ? activeItemRef : undefined} type="button" className="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition hover:bg-black/5 dark:hover:bg-white/10" style={{ background: index === activeIndex ? theme.toolbar.activeBg : undefined, color: index === activeIndex ? theme.toolbar.activeText : theme.node.text }} onPointerDown={(event) => { event.preventDefault(); onSelect(candidate); }}>
-                            {skill ? <span className="grid size-9 shrink-0 place-items-center"><Sparkles className="size-4" /></span> : reference ? <ReferencePreview reference={reference} /> : null}
-                            <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{title}</span><span className="mt-0.5 block truncate text-xs" style={{ color: theme.node.muted }}>{description}</span></span>
+                        <button key={callable ? `callable:${callable.id}` : skill ? `${skill.name}:${skill.path}` : reference?.nodeId} ref={index === activeIndex ? activeItemRef : undefined} type="button" className="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2 py-2 text-left transition hover:bg-black/5 dark:hover:bg-white/10" style={{ background: index === activeIndex ? theme.toolbar.activeBg : undefined, color: index === activeIndex ? theme.toolbar.activeText : theme.node.text }} onPointerDown={(event) => { event.preventDefault(); onSelect(candidate); }}>
+                            {callable ? <span className="grid size-9 shrink-0 place-items-center">{callable.icon}</span> : skill ? <span className="grid size-9 shrink-0 place-items-center"><Sparkles className="size-4" /></span> : reference ? <ReferencePreview reference={reference} /> : null}
+                            <span className="min-w-0 flex-1">
+                                <span className="flex min-w-0 items-center gap-1.5">
+                                    <span className="truncate text-sm font-medium">{title}</span>
+                                    {callable ? <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] opacity-70" style={{ background: theme.toolbar.activeBg }}>{callable.kindLabel}</span> : null}
+                                </span>
+                                <span className="mt-0.5 block truncate text-xs" style={{ color: theme.node.muted }}>{description}</span>
+                            </span>
                         </button>
                     );
-                }) : <div className="px-3 py-6 text-center text-xs" style={{ color: theme.node.muted }}>{t(loading ? "agent.composer.mentions.loadingSkills" : command.type === "skill" ? "agent.composer.mentions.noSkills" : "agent.composer.mentions.noResources")}</div>}
+                }) : <div className="px-3 py-6 text-center text-xs" style={{ color: theme.node.muted }}>{t(loading ? "agent.composer.mentions.loadingSkills" : command.type === "skill" ? "agent.composer.mentions.noCallables" : "agent.composer.mentions.noResources")}</div>}
             </div>
         </div>
     );

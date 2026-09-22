@@ -18,6 +18,23 @@ import { useTranslation } from "react-i18next";
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 const selectionBlue = "#2f80ff";
 
+// 画布外观 - 节点透明度。由 InfiniteCanvas 在容器上下发 CSS 变量，节点侧只引用变量；
+// 变量缺失或为 1 时 color-mix 的结果与原色完全等价，因此默认外观零变化。
+const NODE_OPACITY_VAR = "var(--canvas-node-opacity, 1)";
+const FONT_OPACITY_VAR = "var(--canvas-font-opacity, 1)";
+
+/** 把颜色按「节点透明度」调成半透明（只影响卡面底色/边框/媒体，不影响文字层）。 */
+function withNodeOpacity(color: string) {
+    if (!color || color === "transparent") return color;
+    return `color-mix(in srgb, ${color} calc(${NODE_OPACITY_VAR} * 100%), transparent)`;
+}
+
+/** 节点上文字层的透明度。 */
+const fontOpacityStyle = { opacity: FONT_OPACITY_VAR } as React.CSSProperties;
+
+/** 节点媒体内容（图片/视频）的透明度。 */
+const nodeMediaOpacityStyle = { opacity: NODE_OPACITY_VAR } as React.CSSProperties;
+
 type CanvasNodeProps = {
     data: CanvasNodeData;
     scale: number;
@@ -323,7 +340,7 @@ export const CanvasNode = React.memo(function CanvasNode({
             }}
         >
             {!referenceSelectionState && (isSelected || hovered || isEditingTitle) && (
-                <div className="absolute left-3 top-[-28px] z-[65] max-w-[calc(100%-24px)]" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+                <div className="absolute left-3 top-[-28px] z-[65] max-w-[calc(100%-24px)]" style={fontOpacityStyle} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
                     {isEditingTitle ? (
                         <input
                             ref={titleInputRef}
@@ -361,8 +378,8 @@ export const CanvasNode = React.memo(function CanvasNode({
             <div
                 className="relative h-full w-full overflow-visible rounded-3xl border-2"
                 style={{
-                    background: isGroup ? "transparent" : hasImageContent || hasVideoContent || transparentBg ? "transparent" : theme.node.fill,
-                    borderColor: isGroup ? (isGroupDropTarget || isActive ? selectionBlue : theme.node.stroke) : hasImageContent ? imageBorderColor : isActive ? selectionBlue : isRelated ? theme.node.muted : transparentBg ? "transparent" : theme.node.stroke,
+                    background: isGroup ? "transparent" : hasImageContent || hasVideoContent || transparentBg ? "transparent" : withNodeOpacity(theme.node.fill),
+                    borderColor: isGroup ? (isGroupDropTarget || isActive ? selectionBlue : withNodeOpacity(theme.node.stroke)) : hasImageContent ? (isRelated ? withNodeOpacity(theme.node.muted) : imageBorderColor) : isActive ? selectionBlue : isRelated ? theme.node.muted : transparentBg ? "transparent" : withNodeOpacity(theme.node.stroke),
                     borderStyle: isGroup ? "dashed" : "solid",
                     boxShadow: isGroupDropTarget ? `0 0 0 2px ${selectionBlue}66, inset 0 0 0 999px ${selectionBlue}10` : isActive ? `0 0 0 1px ${selectionBlue}55` : isRelated ? `0 0 0 1px ${theme.node.muted}55, 0 18px 48px rgba(0,0,0,.14)` : undefined,
                 }}
@@ -396,7 +413,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                     className={`relative flex h-full w-full items-center justify-center rounded-[inherit] ${isBatchRoot ? "overflow-visible" : "overflow-hidden"}`}
                     style={
                         {
-                            background: isGroup ? "transparent" : hasImageContent || hasVideoContent || transparentBg ? "transparent" : theme.node.fill,
+                            background: isGroup ? "transparent" : hasImageContent || hasVideoContent || transparentBg ? "transparent" : withNodeOpacity(theme.node.fill),
                             pointerEvents: contentInteractive ? undefined : "none",
                         } as React.CSSProperties
                     }
@@ -482,7 +499,7 @@ const nodeContentRenderers = {
 function GroupNodeContent({ node, theme, groupChildCount }: NodeContentRendererProps) {
     const { t } = useTranslation();
     return (
-        <div className="pointer-events-none flex h-full w-full p-3">
+        <div className="pointer-events-none flex h-full w-full p-3" style={fontOpacityStyle}>
             <div className="flex h-7 max-w-full items-center gap-2 px-1 text-xs font-medium" style={{ color: theme.node.text }}>
                 <Group className="size-3.5 shrink-0" style={{ color: theme.node.muted }} />
                 <span className="truncate">{node.title || t("canvas.node.group")}</span>
@@ -556,7 +573,7 @@ function TextContent({ node, theme, isEditingContent, textareaRef, mentionRefere
                       .filter((text) => text.id !== primaryTextId)
                       .map((text, index) => <ExpandedTextCard key={text.id} node={node} text={text} index={index} onSetPrimary={() => onSetBatchPrimary?.(text.id)} />)
                 : null}
-            <div className="flex h-full w-full flex-col overflow-hidden rounded-3xl">
+            <div className="flex h-full w-full flex-col overflow-hidden rounded-3xl" style={fontOpacityStyle}>
                 {isEditingContent ? (
                     <CanvasResourceMentionTextarea
                         ref={textareaRef}
@@ -627,8 +644,8 @@ function ExpandedTextCard({ node, text, index, onSetPrimary }: { node: CanvasNod
                     top: y,
                     width: node.width,
                     height: node.height,
-                    background: theme.node.panel,
-                    borderColor: theme.node.stroke,
+                    background: withNodeOpacity(theme.node.panel),
+                    borderColor: withNodeOpacity(theme.node.stroke),
                     "--batch-from-x": `${-x}px`,
                     "--batch-from-y": `${-y}px`,
                     "--batch-from-rotate": `${4 + index * 2}deg`,
@@ -661,7 +678,7 @@ function TextSlotStatus({ text }: { text: CanvasNodeText }) {
     const failed = text.status === "error";
     const loading = text.status === "loading";
     return (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: theme.node.fill, color: failed ? theme.node.text : theme.node.activeStroke }}>
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: withNodeOpacity(theme.node.fill), color: failed ? theme.node.text : theme.node.activeStroke }}>
             {failed ? <span className="text-xs leading-5">{text.errorDetails || t("canvas.node.failed")}</span> : loading ? <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} /> : <span className="text-xs">{t("apiErrors.noContent")}</span>}
             {loading ? <span className="text-[10px] tracking-[0.2em]">{t("canvas.node.generating")}</span> : null}
         </div>
@@ -708,7 +725,7 @@ function VideoNodeContent({ node, theme }: NodeContentRendererProps) {
                 <span className="text-sm">{t("canvas.node.emptyVideo")}</span>
             </div>
         );
-    return <video src={node.metadata.content} controls className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-video={node.id} data-canvas-no-zoom />;
+    return <video src={node.metadata.content} controls style={nodeMediaOpacityStyle} className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-video={node.id} data-canvas-no-zoom />;
 }
 
 function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
@@ -721,7 +738,7 @@ function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
             </div>
         );
     return (
-        <div className="flex h-full w-full flex-col justify-center gap-3 px-4" style={{ background: theme.node.fill, color: theme.node.text }}>
+        <div className="flex h-full w-full flex-col justify-center gap-3 px-4" style={{ background: withNodeOpacity(theme.node.fill), color: theme.node.text }}>
             <div className="flex min-w-0 items-center gap-2 text-sm opacity-70">
                 <Music2 className="size-4 shrink-0" />
                 <span className="truncate">{t("canvas.node.audio")}</span>
@@ -789,6 +806,7 @@ function ImageContent({
                         src={primarySource}
                         alt={node.title}
                         draggable={false}
+                        style={nodeMediaOpacityStyle}
                         onDragStart={(event) => event.preventDefault()}
                         className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`}
                     />
@@ -859,7 +877,7 @@ function ExpandedImageCard({ node, image, index, scale, onView, onSetPrimary, on
                     width: node.width,
                     height: node.height,
                     background: "transparent",
-                    borderColor: theme.node.stroke,
+                    borderColor: withNodeOpacity(theme.node.stroke),
                     "--batch-from-x": `${-x}px`,
                     "--batch-from-y": `${-y}px`,
                     "--batch-from-rotate": `${4 + index * 2}deg`,
@@ -874,7 +892,7 @@ function ExpandedImageCard({ node, image, index, scale, onView, onSetPrimary, on
                 onView();
             }}
         >
-            {image.content ? <img src={source} alt={node.title} draggable={false} className="pointer-events-none h-full w-full select-none object-contain" /> : <ImageSlotStatus image={image} />}
+            {image.content ? <img src={source} alt={node.title} draggable={false} style={nodeMediaOpacityStyle} className="pointer-events-none h-full w-full select-none object-contain" /> : <ImageSlotStatus image={image} />}
             {image.content ? (
                 <div className="pointer-events-none absolute inset-x-2 top-2 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/node:pointer-events-auto group-hover/node:opacity-100">
                     <button type="button" className="flex h-8 min-w-0 flex-1 items-center justify-center gap-1 rounded-lg border px-1.5 text-[10px] font-medium shadow-[0_6px_18px_rgba(15,23,42,.16)] backdrop-blur-md transition hover:scale-[1.02]" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.activeText }} title={t("common.download")} onClick={(event) => (event.stopPropagation(), onDownload())}>
@@ -917,7 +935,7 @@ function ImageSlotStatus({ image }: { image?: CanvasNodeImage }) {
     const { t } = useTranslation();
     const failed = image?.status === "error";
     return (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: theme.node.fill, color: failed ? theme.node.text : theme.node.activeStroke }}>
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center" style={{ background: withNodeOpacity(theme.node.fill), color: failed ? theme.node.text : theme.node.activeStroke }}>
             {failed ? <span className="text-xs leading-5">{image.errorDetails || t("canvas.node.failed")}</span> : <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />}
             {!failed ? <span className="text-[10px] tracking-[0.2em]">{t("canvas.node.generating")}</span> : null}
         </div>

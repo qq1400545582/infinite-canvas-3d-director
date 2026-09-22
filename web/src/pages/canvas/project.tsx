@@ -10,11 +10,11 @@ import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audi
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { ensureImagePreview, uploadImage } from "@/services/image-storage";
-import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
-import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
+import { CANVAS_DEFAULT_BACKGROUND_OPACITY, CANVAS_DEFAULT_FONT_OPACITY, CANVAS_DEFAULT_NODE_OPACITY, canvasThemes, type CanvasBackgroundMedia, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
@@ -112,6 +112,10 @@ type CanvasHistoryEntry = Pick<CanvasClipboard, "nodes" | "connections"> & {
     activeChatId: string | null;
     backgroundMode: CanvasBackgroundMode;
     showImageInfo: boolean;
+    backgroundMedia: CanvasBackgroundMedia | null;
+    backgroundOpacity: number;
+    fontOpacity: number;
+    nodeOpacity: number;
 };
 
 type CanvasGenerationRequest = {
@@ -236,6 +240,11 @@ function InfiniteCanvasPage() {
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
     const [showImageInfo, setShowImageInfo] = useState(false);
+    const [backgroundMedia, setBackgroundMedia] = useState<CanvasBackgroundMedia | null>(null);
+    const [backgroundMediaUrl, setBackgroundMediaUrl] = useState("");
+    const [backgroundOpacity, setBackgroundOpacity] = useState(CANVAS_DEFAULT_BACKGROUND_OPACITY);
+    const [fontOpacity, setFontOpacity] = useState(CANVAS_DEFAULT_FONT_OPACITY);
+    const [nodeOpacity, setNodeOpacity] = useState(CANVAS_DEFAULT_NODE_OPACITY);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [projectLoaded, setProjectLoaded] = useState(false);
@@ -282,8 +291,12 @@ function InfiniteCanvasPage() {
             activeChatId,
             backgroundMode,
             showImageInfo,
+            backgroundMedia,
+            backgroundOpacity,
+            fontOpacity,
+            nodeOpacity,
         }),
-        [activeChatId, backgroundMode, chatSessions, showImageInfo],
+        [activeChatId, backgroundMedia, backgroundMode, backgroundOpacity, chatSessions, fontOpacity, nodeOpacity, showImageInfo],
     );
 
     const cleanupCanvasFiles = useCallback(
@@ -444,6 +457,10 @@ function InfiniteCanvasPage() {
             setActiveChatId(project.activeChatId || null);
             setBackgroundMode(project.backgroundMode);
             setShowImageInfo(project.showImageInfo || false);
+            setBackgroundMedia(project.backgroundMedia || null);
+            setBackgroundOpacity(project.backgroundOpacity ?? CANVAS_DEFAULT_BACKGROUND_OPACITY);
+            setFontOpacity(project.fontOpacity ?? CANVAS_DEFAULT_FONT_OPACITY);
+            setNodeOpacity(project.nodeOpacity ?? CANVAS_DEFAULT_NODE_OPACITY);
             setViewport(project.viewport);
             historyRef.current = { past: [], future: [] };
             if (historyCommitTimerRef.current) {
@@ -457,6 +474,10 @@ function InfiniteCanvasPage() {
                 activeChatId: project.activeChatId || null,
                 backgroundMode: project.backgroundMode,
                 showImageInfo: project.showImageInfo || false,
+                backgroundMedia: project.backgroundMedia || null,
+                backgroundOpacity: project.backgroundOpacity ?? CANVAS_DEFAULT_BACKGROUND_OPACITY,
+                fontOpacity: project.fontOpacity ?? CANVAS_DEFAULT_FONT_OPACITY,
+                nodeOpacity: project.nodeOpacity ?? CANVAS_DEFAULT_NODE_OPACITY,
             };
             setHistoryState({ canUndo: false, canRedo: false });
             setProjectLoaded(true);
@@ -486,7 +507,11 @@ function InfiniteCanvasPage() {
             previous.chatSessions === next.chatSessions &&
             previous.activeChatId === next.activeChatId &&
             previous.backgroundMode === next.backgroundMode &&
-            previous.showImageInfo === next.showImageInfo
+            previous.showImageInfo === next.showImageInfo &&
+            previous.backgroundMedia === next.backgroundMedia &&
+            previous.backgroundOpacity === next.backgroundOpacity &&
+            previous.fontOpacity === next.fontOpacity &&
+            previous.nodeOpacity === next.nodeOpacity
         )
             return;
 
@@ -508,12 +533,28 @@ function InfiniteCanvasPage() {
                 historyCommitTimerRef.current = null;
             }
         };
-    }, [activeChatId, backgroundMode, chatSessions, connections, createHistoryEntry, nodes, projectLoaded, showImageInfo]);
+    }, [activeChatId, backgroundMedia, backgroundMode, backgroundOpacity, chatSessions, connections, createHistoryEntry, fontOpacity, nodeOpacity, nodes, projectLoaded, showImageInfo]);
 
     useEffect(() => {
         if (!projectLoaded || historyPausedRef.current) return;
-        updateProject(projectId, { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo });
-    }, [activeChatId, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
+        updateProject(projectId, { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo, backgroundMedia, backgroundOpacity, fontOpacity, nodeOpacity });
+    }, [activeChatId, backgroundMedia, backgroundMode, backgroundOpacity, chatSessions, connections, fontOpacity, nodeOpacity, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
+
+    // 画布外观 - 背景媒体：storageKey → 可显示的 objectURL（刷新后重新解析，不把二进制写进工程数据）。
+    useEffect(() => {
+        const storageKey = backgroundMedia?.storageKey;
+        if (!storageKey) {
+            setBackgroundMediaUrl("");
+            return;
+        }
+        let alive = true;
+        void resolveMediaUrl(storageKey).then((url) => {
+            if (alive) setBackgroundMediaUrl(url);
+        });
+        return () => {
+            alive = false;
+        };
+    }, [backgroundMedia?.storageKey]);
 
     useEffect(() => {
         if (!dialogNodeId) setNodeImageSettingsOpen(false);
@@ -1142,6 +1183,10 @@ function InfiniteCanvasPage() {
         setActiveChatId(entry.activeChatId);
         setBackgroundMode(entry.backgroundMode);
         setShowImageInfo(entry.showImageInfo);
+        setBackgroundMedia(entry.backgroundMedia);
+        setBackgroundOpacity(entry.backgroundOpacity);
+        setFontOpacity(entry.fontOpacity);
+        setNodeOpacity(entry.nodeOpacity);
         setSelectedNodeIds(new Set());
         setSelectedConnectionId(null);
         setContextMenu(null);
@@ -1150,6 +1195,28 @@ function InfiniteCanvasPage() {
             applyingHistoryRef.current = false;
             setHistoryState({ canUndo: historyRef.current.past.length > 0, canRedo: historyRef.current.future.length > 0 });
         });
+    }, []);
+
+    // 画布外观 - 上传背景图片/视频：只把文件写进本地媒体库，工程数据里仅保留 storageKey。
+    const selectBackgroundMedia = useCallback(
+        async (file: File) => {
+            try {
+                const uploaded = await uploadMediaFile(file, "background");
+                // 有的视频容器（如 mkv/mov）在系统里没有登记 MIME，这里再按扩展名兜底判断。
+                const looksVideo = uploaded.mimeType.startsWith("video/") || /\.(mp4|webm|mov|m4v|ogv|avi|mkv|flv|wmv)$/i.test(file.name);
+                const kind = looksVideo ? ("video" as const) : ("image" as const);
+                setBackgroundMedia({ kind, storageKey: uploaded.storageKey, mimeType: uploaded.mimeType || "application/octet-stream", name: file.name });
+                setBackgroundMediaUrl(uploaded.url);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : t("canvas.toolbar.backgroundFailed"));
+            }
+        },
+        [message, t],
+    );
+
+    const clearBackgroundMedia = useCallback(() => {
+        setBackgroundMedia(null);
+        setBackgroundMediaUrl("");
     }, []);
 
     const undoCanvas = useCallback(() => {
@@ -3139,6 +3206,11 @@ function InfiniteCanvasPage() {
                     viewport={viewport}
                     tool={canvasTool}
                     backgroundMode={backgroundMode}
+                    backgroundMediaUrl={backgroundMediaUrl}
+                    backgroundMediaKind={backgroundMedia?.kind}
+                    backgroundOpacity={backgroundOpacity}
+                    fontOpacity={fontOpacity}
+                    nodeOpacity={nodeOpacity}
                     onViewportChange={(next) => {
                         setViewport(next);
                         setContextMenu(null);
@@ -3297,6 +3369,10 @@ function InfiniteCanvasPage() {
                     canRedo={historyState.canRedo}
                     backgroundMode={backgroundMode}
                     showImageInfo={showImageInfo}
+                    backgroundMedia={backgroundMedia}
+                    backgroundOpacity={backgroundOpacity}
+                    fontOpacity={fontOpacity}
+                    nodeOpacity={nodeOpacity}
                     onAddImage={() => createNode(CanvasNodeType.Image)}
                     onAddVideo={() => createNode(CanvasNodeType.Video)}
                     onAddAudio={() => createNode(CanvasNodeType.Audio)}
@@ -3312,6 +3388,11 @@ function InfiniteCanvasPage() {
                     onCanvasToolChange={setCanvasTool}
                     onBackgroundModeChange={setBackgroundMode}
                     onShowImageInfoChange={setShowImageInfo}
+                    onSelectBackgroundMedia={(file) => void selectBackgroundMedia(file)}
+                    onClearBackgroundMedia={clearBackgroundMedia}
+                    onBackgroundOpacityChange={setBackgroundOpacity}
+                    onFontOpacityChange={setFontOpacity}
+                    onNodeOpacityChange={setNodeOpacity}
                 />
 
                 {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}

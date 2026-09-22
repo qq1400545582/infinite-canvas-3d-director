@@ -1,5 +1,5 @@
-import { Button, Drawer, Input, Segmented, Select, Space } from "antd";
-import { ListPlus, Trash2 } from "lucide-react";
+import { App, Button, Drawer, Input, Segmented, Select, Space } from "antd";
+import { ListPlus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -11,9 +11,11 @@ type ScriptTarget = { name: string; capability: ModelCapability; value: string }
 
 export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: boolean; channel: ModelChannel | null; onSave: (channel: ModelChannel) => void; onClose: () => void }) {
     const { t } = useTranslation();
+    const { message } = App.useApp();
     const [draft, setDraft] = useState<ModelChannel | null>(channel);
     const [selectOpen, setSelectOpen] = useState(false);
     const [scriptTarget, setScriptTarget] = useState<ScriptTarget | null>(null);
+    const [syncing, setSyncing] = useState(false);
     const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
         { label: "OpenAI", value: "openai" },
         { label: "Gemini", value: "gemini" },
@@ -46,6 +48,48 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
     const save = () => {
         onSave({ ...draft, name: draft.name.trim() || t("config.channels.unnamed"), models: normalizeChannelModels(draft.models) });
         onClose();
+    };
+
+    /** 把本渠道写入 Codex 配置，让画布生成与 Agent 对话共用同一套供应商，无需配置两遍。 */
+    const syncToCodex = async () => {
+        const baseUrl = draft.baseUrl.trim().replace(/\/+$/, "");
+        const apiKey = draft.apiKey.trim();
+        if (!baseUrl || !apiKey) {
+            message.warning(t("config.channelEditor.syncMissing"));
+            return;
+        }
+        if (draft.apiFormat !== "openai") {
+            message.warning(t("config.channelEditor.syncProtocolUnsupported"));
+            return;
+        }
+        const model = draft.models.find((item) => item.capability === "text")?.name || draft.models[0]?.name || "";
+        if (!model) {
+            message.warning(t("config.channelEditor.syncNoModel"));
+            return;
+        }
+        setSyncing(true);
+        try {
+            const response = await fetch("/__canvas-agent/sync-codex", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ baseUrl, apiKey, model }),
+            });
+            if (response.status === 404) {
+                message.warning(t("config.channelEditor.syncUnavailable"));
+                return;
+            }
+            const result = (await response.json()) as { ok?: boolean; error?: string; backup?: { config: string } };
+            if (!response.ok || !result.ok) {
+                message.error(result.error || t("config.channelEditor.syncFailed"));
+                return;
+            }
+            if (result.backup?.config) console.info("[canvas] codex config backup:", result.backup.config);
+            message.success(t("config.channelEditor.synced", { model }));
+        } catch {
+            message.warning(t("config.channelEditor.syncUnavailable"));
+        } finally {
+            setSyncing(false);
+        }
     };
 
     return (
@@ -81,6 +125,13 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                     <span className="mb-1 block text-sm font-medium">API Key</span>
                     <Input.Password value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} placeholder="sk-..." />
                 </label>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-stone-200 px-3 py-2.5 dark:border-stone-800">
+                <div className="min-w-0 flex-1 text-xs text-stone-500">{t("config.channelEditor.syncHint")}</div>
+                <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={syncing} onClick={syncToCodex}>
+                    {t("config.channelEditor.sync")}
+                </Button>
             </div>
 
             <div className="mt-6 mb-3 flex flex-wrap items-center justify-between gap-2">
