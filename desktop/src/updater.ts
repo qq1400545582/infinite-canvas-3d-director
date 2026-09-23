@@ -17,6 +17,7 @@ import { readShellUpdateFlag, quitAndInstallShellUpdate } from "./auto-update";
  * 远程 manifest 地址由环境变量 CANVAS_UPDATE_MANIFEST_URL 指定（例如你的 CF Pages 站 build-manifest.json）。
  */
 
+/** 环境变量兜底（优先级最高）。常规用法是在界面「更新源」里填一次，落盘到 userData/update-config.json。 */
 const MANIFEST_ENV = process.env.CANVAS_UPDATE_MANIFEST_URL || "";
 const OPENREEL_SW_CACHE_PREFIX = "openreel-v2";
 
@@ -80,11 +81,29 @@ function recursiveList(dir: string, base = dir): string[] {
     return out;
 }
 
-export function createLayerUpdateMiddleware(overlayDir: string, builtinDir: string, userDataDir: string): Middleware[] {
+export function createLayerUpdateMiddleware(overlayDir: string, builtinDir: string, userDataDir: string, shellVersion = "0.1.0"): Middleware[] {
+    const configFile = path.join(userDataDir, "update-config.json");
+
+    /** 读取用户配置的更新源（env 优先，其次配置文件）。 */
+    function readManifestUrl(): string {
+        if (MANIFEST_ENV) return MANIFEST_ENV;
+        try {
+            const raw = JSON.parse(readFileSync(configFile, "utf8")) as { manifestUrl?: string };
+            return typeof raw.manifestUrl === "string" ? raw.manifestUrl.trim() : "";
+        } catch {
+            return "";
+        }
+    }
+
+    function writeManifestUrl(url: string): void {
+        mkdirSync(path.dirname(configFile), { recursive: true });
+        writeFileSync(configFile, JSON.stringify({ manifestUrl: url, updatedAt: new Date().toISOString() }, null, 2));
+    }
+
     const state: LayerState = {
         running: false,
         mode: null,
-        configured: Boolean(MANIFEST_ENV),
+        configured: Boolean(readManifestUrl()),
         builtinVersion: readLocalManifest(builtinDir)?.version ?? null,
         overlayVersion: loadOverlayManifest(overlayDir)?.version ?? null,
         remoteVersion: null,
@@ -104,6 +123,32 @@ export function createLayerUpdateMiddleware(overlayDir: string, builtinDir: stri
         res.end(JSON.stringify(body));
     };
 
+    /** 读取请求体（限 64KB，避免异常请求把内存撑爆）。 */
+    function readJsonBody(req: Parameters<Middleware>[0]): Promise<Record<string, unknown>> {
+        return new Promise((resolve, reject) => {
+            let size = 0;
+            const chunks: Buffer[] = [];
+            req.on("data", (chunk: Buffer) => {
+                size += chunk.length;
+                if (size > 64 * 1024) {
+                    reject(new Error("请求体过大"));
+                    req.destroy();
+                    return;
+                }
+                chunks.push(chunk);
+            });
+            req.on("end", () => {
+                try {
+                    const text = Buffer.concat(chunks).toString("utf8").trim();
+                    resolve(text ? (JSON.parse(text) as Record<string, unknown>) : {});
+                } catch (error) {
+                    reject(error as Error);
+                }
+            });
+            req.on("error", reject);
+        });
+    }
+
     /** 原子写入：先写到 .tmp，校验 sha256 后再 rename，避免半截文件。 */
     async function downloadAndPlace(baseUrl: string, file: ManifestFile): Promise<void> {
         const res = await fetch(baseUrl + file.path);
@@ -118,7 +163,13 @@ export function createLayerUpdateMiddleware(overlayDir: string, builtinDir: stri
             const text = buf.toString("utf8").replace(new RegExp(OPENREEL_SW_CACHE_PREFIX, "g"), `${OPENREEL_SW_CACHE_PREFIX}-overlay-${pendingRemote?.version ?? "v"}`);
             content = Buffer.from(text, "utf8");
         }
-        const target = path.join(overlayDir, file.path);
+        // 防御：远程 manifest 的 path 是不可信输入，必须拦住 ../ 之类的路径穿越，
+        // 否则一个配错（或恶意）的 manifest 就能往 overlayDir 之外写文件。
+        const target = path.resolve(overlayDir, file.path);
+        const overlayResolved = path.resolve(overlayDir);
+        if (target !== overlayResolved && !target.startsWith(overlayResolved + path.sep)) {
+            throw new Error(`manifest 路径非法：${file.path}`);
+        }
         mkdirSync(path.dirname(target), { recursive: true });
         const tmp = `${target}.tmp-${process.pid}`;
         writeFileSync(tmp, content);
@@ -126,14 +177,29 @@ export function createLayerUpdateMiddleware(overlayDir: string, builtinDir: stri
     }
 
     async function doCheck(): Promise<void> {
-        if (!MANIFEST_ENV) {
-            state.error = "未配置 CANVAS_UPDATE_MANIFEST_URL";
+        const manifestUrl = readManifestUrl();
+        if (!manifestUrl) {
+            state.error = "未配置更新源";
+            state.changed = 0;
             return;
         }
-        const res = await fetch(MANIFEST_ENV);
+        const res = await fetch(manifestUrl);
         if (!res.ok) throw new Error(`拉取 manifest 失败：${res.status}`);
         const remote = (await res.json()) as BuildManifest;
-        const baseUrl = MANIFEST_ENV.slice(0, MANIFEST_ENV.lastIndexOf("/") + 1);
+        if (!remote || !Array.isArray(remote.files)) throw new Error("manifest 格式不正确（缺少 files 数组）");
+        // 远程 manifest 是**不可信输入**：先在解析阶段就把非法 path 拦掉（fail fast，避免先下载再拒绝），
+        // 否则一个配错或恶意的 manifest 就能往 overlayDir 之外写文件。
+        const overlayResolved = path.resolve(overlayDir);
+        for (const file of remote.files) {
+            if (!file || typeof file.path !== "string" || !file.path.trim()) {
+                throw new Error("manifest 含非法条目（path 缺失）");
+            }
+            const resolved = path.resolve(overlayResolved, file.path);
+            if (resolved !== overlayResolved && !resolved.startsWith(overlayResolved + path.sep)) {
+                throw new Error(`manifest 路径非法：${file.path}`);
+            }
+        }
+        const baseUrl = manifestUrl.slice(0, manifestUrl.lastIndexOf("/") + 1);
         pendingRemote = remote;
         state.remoteBaseUrl = baseUrl;
         state.remoteVersion = remote.version;
@@ -211,9 +277,20 @@ export function createLayerUpdateMiddleware(overlayDir: string, builtinDir: stri
 
         // /__online-update/* 兼容现有面板：桌面端返回 supported:false + desktop:true，
         // 现有面板据此展示「桌面端请用版本面板的三层更新」（见 web 端 guarded 分支）。
+        // ⚠️ 必须同时带上 localVersion/baseVersion/protectedPaths/task 这些**非可选**字段的占位：
+        // 老前端（已发布/已安装的构建）会直接读 status.task.running，缺字段会抛
+        // "Cannot read properties of undefined (reading 'running')" 连带整个应用崩掉。这里是纵深防御。
         if (url.startsWith("/__online-update/")) {
             if (url === "/__online-update/status" && req.method === "GET") {
-                return sendJson(res, 200, { ok: true, supported: false, desktop: true });
+                return sendJson(res, 200, {
+                    ok: true,
+                    supported: false,
+                    desktop: true,
+                    localVersion: state.overlayVersion || state.builtinVersion,
+                    baseVersion: null,
+                    protectedPaths: [],
+                    task: { running: false, mode: null, finishedAt: 0, error: null, result: null, lines: [] },
+                });
             }
             if (req.method === "POST") {
                 return sendJson(res, 200, { ok: false, error: "desktop-update-handled-by-layer" });
@@ -224,20 +301,55 @@ export function createLayerUpdateMiddleware(overlayDir: string, builtinDir: stri
         // /__layer-update/*
         if (url === "/__layer-update/status" && req.method === "GET") {
             const shellUpdate = readShellUpdateFlag();
+            const manifestUrl = readManifestUrl();
             return sendJson(res, 200, {
                 ok: true,
-                configured: state.configured,
-                shell: { version: process.env.npm_package_version || "0.1.0", update: shellUpdate },
+                configured: Boolean(manifestUrl),
+                manifestUrl,
+                manifestFromEnv: Boolean(MANIFEST_ENV),
+                shell: { version: shellVersion, update: shellUpdate },
                 frontend: { builtinVersion: state.builtinVersion, overlayVersion: state.overlayVersion },
                 remote: { version: state.remoteVersion, baseUrl: state.remoteBaseUrl, changed: state.changed },
                 task: { running: state.running, mode: state.mode, error: state.error, finishedAt: state.finishedAt },
             });
         }
+        // 更新源配置：GET 读、POST 写（写空字符串 = 清除）。落盘 userData/update-config.json。
+        if (url === "/__layer-update/config" && req.method === "GET") {
+            return sendJson(res, 200, { ok: true, manifestUrl: readManifestUrl(), fromEnv: Boolean(MANIFEST_ENV) });
+        }
+        if (url === "/__layer-update/config" && req.method === "POST") {
+            if (MANIFEST_ENV) return sendJson(res, 409, { ok: false, error: "更新源由环境变量 CANVAS_UPDATE_MANIFEST_URL 指定，请改环境变量" });
+            void readJsonBody(req)
+                .then((body) => {
+                    const raw = typeof body.manifestUrl === "string" ? body.manifestUrl.trim() : "";
+                    if (raw && !/^https?:\/\//i.test(raw)) {
+                        return sendJson(res, 400, { ok: false, error: "invalid-url" });
+                    }
+                    writeManifestUrl(raw);
+                    // 换源后之前的远端信息与差异全部作废
+                    state.configured = Boolean(raw);
+                    state.remoteVersion = null;
+                    state.remoteBaseUrl = null;
+                    state.changed = 0;
+                    state.error = null;
+                    pendingDiff = [];
+                    pendingRemote = null;
+                    return sendJson(res, 200, { ok: true, manifestUrl: raw, configured: Boolean(raw) });
+                })
+                .catch((error: Error) => sendJson(res, 400, { ok: false, error: error.message }));
+            return;
+        }
         if (url === "/__layer-update/check" && req.method === "POST") {
+            if (!readManifestUrl()) {
+                return sendJson(res, 400, { ok: false, error: "not-configured" });
+            }
             void runTask("check").then((started) => sendJson(res, started ? 200 : 409, { ok: started, error: started ? undefined : "task running" }));
             return;
         }
         if (url === "/__layer-update/apply" && req.method === "POST") {
+            if (!readManifestUrl()) {
+                return sendJson(res, 400, { ok: false, error: "not-configured" });
+            }
             void runTask("apply").then((started) => sendJson(res, started ? 200 : 409, { ok: started, error: started ? undefined : "task running" }));
             return;
         }

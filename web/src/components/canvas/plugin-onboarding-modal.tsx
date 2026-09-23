@@ -6,11 +6,11 @@ import { APP_VERSION } from "@/constant/env";
 
 const SEEN_KEY = "infinite-canvas:plugin-onboarding-seen";
 
-// 4 个自研插件的展示顺序（id 用于将来联动插件面板）。
-const PLUGIN_IDS = ["clipshot-run", "director-desk", "jlmlh-3d-director", "openreel-video"] as const;
+// 4 个自研插件的展示顺序（id 与插件自身的 PLUGIN_ID 一致，用于将来联动插件面板）。
+const PLUGIN_IDS = ["clipshot", "director-desk", "jlmlh-3d-director", "openreel-video"] as const;
 
 const PLUGIN_I18N_KEY: Record<(typeof PLUGIN_IDS)[number], "clipshot" | "directorDesk" | "jlmlh" | "openreel"> = {
-    "clipshot-run": "clipshot",
+    clipshot: "clipshot",
     "director-desk": "directorDesk",
     "jlmlh-3d-director": "jlmlh",
     "openreel-video": "openreel",

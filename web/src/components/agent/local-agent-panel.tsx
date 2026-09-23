@@ -76,6 +76,48 @@ const AGENT_PROTOCOL_VERSION = 6;
 const HISTORY_RETRY_DELAYS_MS = [0, 150, 350, 700, 1200];
 const AGENT_REASONING_EFFORTS = new Set<AgentReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const rt = (key: string, options?: Record<string, unknown>) => i18n.t(`agent.runtime.${key}`, options);
+/** 「连接」文案在 agent.connect 命名空间下（rt 只对应 agent.runtime，别混用，否则会渲染出原始 key）。 */
+const ct = (key: string, options?: Record<string, unknown>) => i18n.t(`agent.connect.${key}`, options);
+
+/** 「一键启动后端」接口探测超时：本地服务应瞬时响应，超时即视为不可用，避免按钮长时间无反馈。 */
+const LAUNCHER_PROBE_TIMEOUT_MS = 4000;
+
+type LauncherProbe =
+    | { kind: "ok"; data: Record<string, unknown> }
+    | { kind: "forbidden" }
+    | { kind: "error"; message: string }
+    | { kind: "unavailable" };
+
+/**
+ * 探测 /__canvas-agent/* 接口（仅在 serve/dev 与桌面宿主下存在）。
+ *
+ * 必须按**内容**判定，不能只看 HTTP 状态码：静态部署（自建服务器 / CF Pages）下这些路径不存在，
+ * 而静态服务与 SPA 回退常对**无扩展名**路径返回 200 + index.html —— 只看 `res.ok` 会把 HTML
+ * 当成「启动成功」，随后轮询里的 `.json()` 解析失败又被 catch 吞掉，按钮就会空转满 60 秒
+ * 才无声结束，表现正是「点了没反应」。这里非 JSON 一律判定为「当前环境没有该接口」，
+ * 立即给出可操作提示，同时保持桌面宿主（接口存在）行为完全不变。
+ */
+async function probeLauncher(path: string, init?: RequestInit): Promise<LauncherProbe> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LAUNCHER_PROBE_TIMEOUT_MS);
+    try {
+        const res = await fetch(`${window.location.origin}${path}`, { ...init, signal: controller.signal });
+        if (res.status === 403) return { kind: "forbidden" };
+        const type = res.headers.get("content-type") || "";
+        if (!/^application\/json\b/i.test(type)) return { kind: "unavailable" };
+        const data = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!data || typeof data !== "object") return { kind: "unavailable" };
+        if (!res.ok) {
+            const detail = typeof data.error === "string" ? data.error : "";
+            return { kind: "error", message: detail };
+        }
+        return { kind: "ok", data };
+    } catch {
+        return { kind: "unavailable" };
+    } finally {
+        clearTimeout(timer);
+    }
+}
 
 type AgentWorkspace = { workspacePath: string; activeThreadId?: string };
 type AgentThreadsResponse = { ok?: boolean; workspace?: AgentWorkspace; conversation?: AgentConversationState; data?: AgentThreadSummary[] };
@@ -952,19 +994,32 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     const startBackend = useCallback(async () => {
         if (backendStarting) return;
         setBackendStarting(true);
-        const origin = window.location.origin;
         try {
-            const startRes = await fetch(`${origin}/__canvas-agent/start`, { method: "POST" }).catch(() => null);
-            if (!startRes || !startRes.ok) {
+            const started = await probeLauncher("/__canvas-agent/start", { method: "POST" });
+            if (started.kind !== "ok") {
                 setBackendStarting(false);
+                // 三种失败必须说清楚，否则用户看到的又是一次「点了没反应」：
+                //   forbidden   = 接口在，但来源不是本机（局域网其它设备）⇒ 提示改用本机地址；
+                //   unavailable = 当前环境根本没有该接口（网页版 / 静态部署 / 非本机开发服务）⇒
+                //                 浏览器无法拉起用户机器上的进程，只能引导其本机手动启动；
+                //   error       = 接口在但启动失败（例如缺少可执行文件）⇒ 回显服务端原因。
+                const key = started.kind === "forbidden" ? "startBackendLocalOnly" : started.kind === "error" ? "startBackendFailed" : "startBackendUnavailable";
+                const text = started.kind === "error" && started.message ? started.message : ct(key);
+                setAgentState({ connectError: text });
+                message.warning(text);
                 void toggleAgentConnection({ silent: true });
                 return;
             }
             let info: { url?: string; token?: string } | null = null;
             for (let i = 0; i < 60; i++) {
-                const st = await fetch(`${origin}/__canvas-agent/status`).then((r) => r.json()).catch(() => null);
-                if (st && st.running) {
-                    info = { url: st.url, token: st.token };
+                const st = await probeLauncher("/__canvas-agent/status");
+                // 接口中途不可用（服务被关掉 / 环境变化）：立即结束等待，不空转满 60 秒。
+                if (st.kind !== "ok") break;
+                if (st.data.running) {
+                    info = {
+                        url: typeof st.data.url === "string" ? st.data.url : undefined,
+                        token: typeof st.data.token === "string" ? st.data.token : undefined,
+                    };
                     break;
                 }
                 await new Promise((resolve) => setTimeout(resolve, 1000));

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { copyFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import type { Connect, Plugin } from "vite";
 
@@ -20,7 +20,9 @@ import type { Connect, Plugin } from "vite";
  *   1) 已存在的 DSH 托管后端 ~/.dsh/canvas-agent/backend（无需重新下载 ~427MB）
  *   2) npx -y @basketikun/canvas-agent@latest（复用 npm 缓存；首次会下载）
  *
- * 仅在 vite serve 阶段注册，不影响构建产物；所有接口强制 loopback，禁止局域网访问。
+ * 仅在 vite serve 阶段注册，不影响构建产物；所有接口只接受**来自本机**的请求
+ * （loopback，或来源地址就是本机网卡地址之一 —— 同一台机器用局域网 IP / 机器名打开画布时
+ * 属于后者），局域网内其它设备一律拒绝。
  */
 
 const AGENT_PORT = 17371;
@@ -37,9 +39,42 @@ const CODEX_PROVIDER = "custom";
 
 type StartState = { starting: boolean; pid: number | null; error: string | null };
 
-function isLoopback(req: Connect.IncomingMessage) {
-    const addr = req.socket?.remoteAddress || "";
-    if (addr) return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+/**
+ * 本机网卡地址集合（含 IPv4-mapped 形式），5 秒缓存。
+ * 「来源地址 ∈ 本机网卡地址」等价于「请求由本机发出」：局域网里其它设备发起请求时，
+ * remoteAddress 是**它自己**的地址，不可能等于本机网卡地址（那会构成 IP 冲突）。
+ */
+let localAddressCache: { at: number; set: Set<string> } | null = null;
+export function localAddresses(): Set<string> {
+    if (localAddressCache && Date.now() - localAddressCache.at < 5000) return localAddressCache.set;
+    const set = new Set<string>(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+    try {
+        for (const entries of Object.values(networkInterfaces())) {
+            for (const info of entries ?? []) {
+                if (!info.address) continue;
+                const addr = info.address.toLowerCase();
+                set.add(addr);
+                // IPv4 在双栈 socket 上会以 ::ffff:x.x.x.x 呈现，两种写法都要认。
+                if (info.family === "IPv4" || /^\d+\.\d+\.\d+\.\d+$/.test(addr)) set.add(`::ffff:${addr}`);
+            }
+        }
+    } catch {
+        /* 取不到网卡信息时仅保留 loopback：宁可拒绝，也不放宽 */
+    }
+    localAddressCache = { at: Date.now(), set };
+    return set;
+}
+
+/**
+ * 是否来自本机：loopback，或来源地址就是本机网卡地址之一。
+ * 后者覆盖「同一台机器用局域网 IP / 机器名打开画布」的情形 —— 此时 remoteAddress 是
+ * 192.168.x.x 这类地址而不是 127.0.0.1，旧的纯 loopback 判定会把本机用户误判成外部设备，
+ * 导致「一键启动后端」静默失效。局域网其它设备仍然被拒。
+ */
+export function isLocalRequest(req: Connect.IncomingMessage) {
+    // 链路本地 IPv6 会带 zone（fe80::1%12），比对前去掉。
+    const addr = (req.socket?.remoteAddress || "").toLowerCase().split("%")[0];
+    if (addr) return localAddresses().has(addr);
     const host = String(req.headers.host || "");
     return /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host);
 }
@@ -262,7 +297,7 @@ export function canvasAgentLauncher(): Plugin {
             server.middlewares.use(async (req, res, next) => {
                 const url = (req.url || "").split("?")[0];
                 if (!url.startsWith("/__canvas-agent/")) return next();
-                if (!isLoopback(req)) return sendJson(res, 403, { ok: false, error: "仅允许本机访问" });
+                if (!isLocalRequest(req)) return sendJson(res, 403, { ok: false, error: "仅允许本机访问（当前请求来自局域网内的其它设备）" });
 
                 if (req.method === "GET" && url === "/__canvas-agent/status") {
                     const running = await agentReachable();

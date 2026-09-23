@@ -113,6 +113,7 @@ export function ensurePluginsLoaded(): Promise<void> {
 async function loadInstalledPlugins() {
     await usePluginStore.persist.rehydrate();
     const discovered = await loadLocalPlugins();
+    markPresetFixDone(); // 一次性 id 修正已生效，之后不再介入用户的开关
     const records = usePluginStore.getState().plugins.filter((record) => record.enabled);
     await Promise.all(
         records.map(async (record) => {
@@ -136,12 +137,34 @@ async function loadInstalledPlugins() {
 
 // Self-developed local plugins enabled automatically on first discovery so the canvas works
 // out of the box on web/desktop builds. Existing user toggles are always preserved via `existing?.enabled`.
+// 注意：这里必须写插件自身的 PLUGIN_ID——clipshot 的 id 是 "clipshot"，"clipshot-run" 是它的工具栏按钮 id。
 const PRESET_ENABLED_LOCAL_PLUGINS = new Set<string>([
-    "clipshot-run",
+    "clipshot",
     "director-desk",
     "jlmlh-3d-director",
     "openreel-video",
 ]);
+
+// 一次性迁移：早期预设清单把 clipshot 的 id 误写成 "clipshot-run"，已安装过的用户因此把
+// clipshot 持久化成了「停用」——那不是用户的选择（用户从未见过它的可用状态）。
+// 只修正这一个 id，且只做一次；标记写入后完全尊重用户在插件面板里的开关。
+const PRESET_ID_FIX_IDS = new Set<string>(["clipshot"]);
+const PRESET_FIX_KEY = "infinite-canvas:plugin-preset-fix-clipshot";
+
+function presetFixDone() {
+    try { return localStorage.getItem(PRESET_FIX_KEY) === "1"; } catch { return true; }
+}
+
+function markPresetFixDone() {
+    try { localStorage.setItem(PRESET_FIX_KEY, "1"); } catch { /* 隐私模式等场景忽略 */ }
+}
+
+// 解析「首次发现时应否启用」：未持久化过 → 按预设；持久化过 → 尊重原值（仅一次性修正历史误停用）。
+function resolveEnabled(id: string, existingEnabled?: boolean) {
+    if (existingEnabled === undefined) return PRESET_ENABLED_LOCAL_PLUGINS.has(id);
+    if (!existingEnabled && PRESET_ID_FIX_IDS.has(id) && !presetFixDone()) return true;
+    return existingEnabled;
+}
 
 // Discover local plugins from web/public/plugins, add them disabled, and expose them in the manager without a URL.
 // Refresh metadata and source for existing records while preserving the enabled flag so persisted versions stay current.
@@ -171,7 +194,7 @@ async function loadLocalPlugins() {
                     description: plugin.description,
                     url,
                     source,
-                    enabled: existing?.enabled ?? PRESET_ENABLED_LOCAL_PLUGINS.has(plugin.id), // Preserve the user setting; preset self-developed plugins enable on first discovery.
+                    enabled: resolveEnabled(plugin.id, existing?.enabled), // Preserve the user setting; preset self-developed plugins enable on first discovery.
                     local: true,
                 });
             } catch (error) {

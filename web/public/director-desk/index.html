@@ -22,6 +22,44 @@
         } catch (e) {}
       })();
     </script>
+    <!-- director-desk 插件：非安全上下文兼容垫片。
+         用「局域网 IP / 机器名」打开画布时（如 http://192.168.1.217:3000），该地址不是浏览器的
+         安全上下文，Chrome/Edge 会隐藏 crypto.randomUUID 这类安全上下文专属 API；导演台在建场景
+         时（model-JihazxaG.js 的 id 生成）就抛 TypeError，界面永远不渲染，节点表现为一片黑。
+         这里仅在 API 缺失时用 crypto.getRandomValues（非安全上下文同样可用）补一个等价的 v4 UUID。
+         安全上下文（localhost / 127.0.0.1 / https）下 typeof 已是 function，整段直接跳过，
+         行为与官方构建产物完全一致。 -->
+    <script>
+      (function () {
+        try {
+          var c = window.crypto;
+          if (!c || typeof c.randomUUID === "function") return;
+          var HEX = [];
+          for (var i = 0; i < 256; i++) HEX[i] = (i + 256).toString(16).slice(1);
+          var fill = function (b) {
+            if (typeof c.getRandomValues === "function") {
+              c.getRandomValues(b);
+            } else {
+              // 极端降级：连 getRandomValues 都不可用时，至少保证 id 不重复、不抛异常。
+              for (var j = 0; j < b.length; j++) b[j] = (Math.random() * 256) | 0;
+            }
+          };
+          c.randomUUID = function () {
+            var b = new Uint8Array(16);
+            fill(b);
+            b[6] = (b[6] & 15) | 64; // version 4
+            b[8] = (b[8] & 63) | 128; // variant 10xx
+            return (
+              HEX[b[0]] + HEX[b[1]] + HEX[b[2]] + HEX[b[3]] + "-" +
+              HEX[b[4]] + HEX[b[5]] + "-" +
+              HEX[b[6]] + HEX[b[7]] + "-" +
+              HEX[b[8]] + HEX[b[9]] + "-" +
+              HEX[b[10]] + HEX[b[11]] + HEX[b[12]] + HEX[b[13]] + HEX[b[14]] + HEX[b[15]]
+            );
+          };
+        } catch (e) {}
+      })();
+    </script>
     <script type="module" crossorigin src="./assets/index-C0VQvPQj.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/lens-projection-CHzVTabf.js">
     <link rel="modulepreload" crossorigin href="./assets/model-JihazxaG.js">

@@ -27,11 +27,14 @@ type TaskResult = {
 
 type StatusPayload = {
     ok: boolean;
-    localVersion: string | null;
-    baseVersion: string | null;
-    protectedPaths: string[];
+    localVersion?: string | null;
+    baseVersion?: string | null;
+    protectedPaths?: string[];
     desktop?: boolean;
-    task: {
+    // 桌面端 /__online-update/status 只返回 {ok,supported,desktop}，没有 task 字段；
+    // 必须保持可选并用 status?.task?.x 访问，否则会在 effect 中抛
+    // "Cannot read properties of undefined (reading 'running')" 把整个应用打挂。
+    task?: {
         running: boolean;
         mode: string | null;
         finishedAt: number;
@@ -71,7 +74,7 @@ export function OnlineUpdatePanel() {
 
     // 任务进行中时轮询进度
     useEffect(() => {
-        if (!status?.task.running) {
+        if (!status?.task?.running) {
             if (timerRef.current) { window.clearTimeout(timerRef.current); timerRef.current = null; }
             return;
         }

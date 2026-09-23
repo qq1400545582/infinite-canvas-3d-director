@@ -15,7 +15,10 @@ export function createAgentMiddleware(): Middleware[] {
             use: (fn: Middleware) => handlers.push(fn),
         },
     };
-    // 类型上 configureServer 需要 Vite 的 Server 类型，这里用结构化兼容对象即可（只用 middlewares.use）。
-    canvasAgentLauncher().configureServer(fakeServer as unknown as Parameters<ReturnType<typeof canvasAgentLauncher>["configureServer"]>[0]);
+    // Vite 的 configureServer 类型是 ObjectHook：可能是函数，也可能是 { handler, order }。
+    // 两种形态都取出真正的处理函数（运行时只用其中的 middlewares.use）。
+    const hook = canvasAgentLauncher().configureServer;
+    const configure = typeof hook === "function" ? hook : hook?.handler;
+    configure?.(fakeServer as never);
     return handlers;
 }
