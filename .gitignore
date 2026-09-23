@@ -26,6 +26,9 @@ _jlmlh.tar.gz
 .update-cache/
 .git.broken-backup-*/
 
+# electron-vite 构建期生成的临时配置（每次构建换名，非源码）
+desktop/electron.vite.config.*.mjs
+
 # 插件官方 app 子模块与本地依赖/构建产物（源码随仓库，依赖与产物不提交）
 # 注意：plugins/canvas/*/node_modules 只能忽略一层，官方 app 自带 node_modules/dist 需用 ** 递归
 plugins/canvas/**/node_modules/

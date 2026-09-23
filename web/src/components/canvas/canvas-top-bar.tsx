@@ -75,6 +75,30 @@ export function CanvasTopBar({
         <>
             <div className="pointer-events-none absolute left-0 right-0 top-0 z-50 flex h-16 items-center justify-between pl-1 pr-4">
                 <div className="pointer-events-auto flex min-w-0 items-center gap-2">
+                    {/* 显式的返回首页入口：桌面壳没有浏览器地址栏/后退键，只放在汉堡菜单里基本等于没有。 */}
+                    <Tooltip title={t("canvas.backHome")} mouseEnterDelay={0.2}>
+                        <button
+                            type="button"
+                            onClick={onHome}
+                            aria-label={t("canvas.backHome")}
+                            className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition hover:opacity-75"
+                            style={{ borderColor: theme.toolbar.border, background: theme.toolbar.panel, color: theme.node.text }}
+                        >
+                            <Home className="size-3.5" />
+                            <span className="hidden md:inline">{t("canvas.backHomeShort")}</span>
+                        </button>
+                    </Tooltip>
+                    <Tooltip title={t("canvas.projects")} mouseEnterDelay={0.2}>
+                        <button
+                            type="button"
+                            onClick={onProjects}
+                            aria-label={t("canvas.projects")}
+                            className="grid size-7 shrink-0 place-items-center rounded-full transition hover:bg-black/5 dark:hover:bg-white/10"
+                            style={{ color: theme.node.text }}
+                        >
+                            <Images className="size-4" />
+                        </button>
+                    </Tooltip>
                     <Tooltip title={sidePanelOpen ? t("canvas.collapsePanel") : t("canvas.expandPanel")}>
                         <button
                             type="button"

@@ -13,6 +13,27 @@ const webDir = dirname(fileURLToPath(import.meta.url));
 const localVersion = readFileSync(resolve(webDir, "../VERSION"), "utf8").trim() || "dev";
 const localChangelog = readFileSync(resolve(webDir, "../CHANGELOG.md"), "utf8");
 
+/**
+ * 监听端口：环境变量优先（CANVAS_WEB_PORT，其次平台常用的 PORT），默认 3000。
+ * 端口不写死在 package.json 里 —— 本机开发、自建服务器、容器部署用同一份配置即可。
+ */
+function resolveWebPort(): number {
+    for (const raw of [process.env.CANVAS_WEB_PORT, process.env.PORT]) {
+        const port = Number(raw);
+        if (Number.isInteger(port) && port > 0 && port < 65536) return port;
+    }
+    return 3000;
+}
+
+/**
+ * dev 与 preview 共用的网络配置。
+ * strictPort:false ⇒ 默认端口被别的应用占用时，Vite 自动顺延到下一个可用端口
+ * （3000 → 3001 → 3002…）并在终端提示，不需要人工改端口；
+ * 需要「端口必须固定、占用即失败」的场景，可把 strictPort 打开。
+ * 每次调用返回新对象，避免被 Vite 就地改写。
+ */
+const networkOptions = () => ({ host: true, port: resolveWebPort(), strictPort: false });
+
 // Expose /plugins/index.json with local plugin files from public/plugins.
 // The frontend can discover and list them when enabled; development reads the directory live, while builds emit a static registry.
 function localPluginsManifest(): Plugin {
@@ -41,19 +62,21 @@ function localPluginsManifest(): Plugin {
     };
 }
 
-// 构建产物清单（P3a）：对本次构建的每个 asset 计算 sha256，产出 build-manifest.json。
+// 构建产物清单（P3a）：对本次构建的每个产物计算 sha256，产出 build-manifest.json。
 // 桌面端三层更新据此做前端增量覆盖；CF Pages 部署时一并发布，网页版与桌面端共用同一份产物。
+//
+// 注意：必须同时收录 chunk（JS，取 .code）与 asset（CSS/图片等，取 .source）。
+// 只按 asset 过滤会漏掉全部 JS 产物，导致「主 bundle 变了但清单没变」→ 增量更新永远不触发。
 function buildManifest(): Plugin {
     return {
         name: "build-manifest",
         apply: "build",
         generateBundle(_options, bundle) {
-            const files = Object.entries(bundle)
-                .filter(([name, chunk]) => chunk.type === "asset")
-                .map(([name, chunk]) => {
-                    const src = (chunk as { source: string | Uint8Array }).source;
-                    const buf = Buffer.isBuffer(src) ? src : Buffer.from(src as string);
-                    return { path: name, hash: createHash("sha256").update(buf).digest("hex"), size: buf.length };
+            const files = Object.values(bundle)
+                .map((item) => {
+                    const raw = item.type === "asset" ? item.source : item.code;
+                    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as string);
+                    return { path: item.fileName, hash: createHash("sha256").update(buf).digest("hex"), size: buf.length };
                 })
                 .filter((f) => f.path !== "build-manifest.json")
                 .sort((a, b) => a.path.localeCompare(b.path));
@@ -65,6 +88,8 @@ function buildManifest(): Plugin {
 
 export default defineConfig({
     base: process.env.VITE_BASE || "/",
+    server: networkOptions(),
+    preview: networkOptions(),
     plugins: [react(), localPluginsManifest(), onlineUpdate({ repoRoot: resolve(webDir, "..") }), canvasAgentLauncher(), buildManifest()],
     optimizeDeps: {
         // public/ 下的 vendored 产物（OpenReel / 3D 导演台自带 index.html）会被静态原样拷贝、

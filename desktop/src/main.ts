@@ -27,7 +27,8 @@ function createWindow(overlayDir: string, builtinDir: string) {
         backgroundColor: "#0c0a09",
         show: false,
         webPreferences: {
-            preload: path.join(__dirname, "preload.js"),
+            // electron-vite 的默认产物布局：out/main/main.js 与 out/preload/preload.js。
+            preload: path.join(__dirname, "../preload/preload.js"),
             contextIsolation: true,
             nodeIntegration: false,
             // 不设置 COOP/COEP：保持 crossOriginIsolated === false，与现有 nginx 部署一致（openreel 维持单线程，非回归）。
@@ -78,7 +79,7 @@ app.whenReady().then(async () => {
     setupDownloadHandling();
 
     // 本机中间件：画布后端启动（复用 web/ 中间件）+ 三层更新（P3）。顺序无关。
-    const middlewares = [...createAgentMiddleware(), ...createLayerUpdateMiddleware(overlayDir, builtinDir, app.getPath("userData"))];
+    const middlewares = [...createAgentMiddleware(), ...createLayerUpdateMiddleware(overlayDir, builtinDir, app.getPath("userData"), app.getVersion())];
 
     initAutoUpdater();
 

@@ -2,9 +2,8 @@
     "name": "infinite-canvas-desktop",
     "version": "0.1.0",
     "private": true,
-    "type": "module",
     "description": "Infinite Canvas 桌面壳：本机 HTTP 服务（127.0.0.1）+ WebView，复用 web/ 前端与插件，提供一键启动后端、三层更新与离线回退。",
-    "main": "out/main.js",
+    "main": "out/main/main.js",
     "author": "infinite-canvas",
     "scripts": {
         "dev": "electron-vite dev",
@@ -43,8 +42,8 @@
         "publish": [
             {
                 "provider": "github",
-                "owner": "basketikun",
-                "repo": "infinite-canvas",
+                "owner": "qq1400545582",
+                "repo": "infinite-canvas-3d-director",
                 "releaseType": "release"
             }
         ],
@@ -54,7 +53,8 @@
                     "target": "nsis",
                     "arch": "x64"
                 }
-            ]
+            ],
+            "signAndEditExecutable": false
         },
         "mac": {
             "target": ["dmg"]

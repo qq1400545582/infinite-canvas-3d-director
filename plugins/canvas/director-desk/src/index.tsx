@@ -240,7 +240,11 @@ function injectExportToCanvasButton(doc: Document, onExport: () => void) {
 function DirectorDeskContent({ ctx }: CanvasNodeContentProps) {
     const nodeId = ctx.node.id;
     const iframeRef = useRef<HTMLIFrameElement>(null);
-    const [loadError, setLoadError] = useState(false);
+    // 预演台是独立的 5 MB+ SPA：加载期间 iframe 只是一张纯黑空文档，
+    // 且 iframe 的 onError 对 HTTP 错误/被拦截基本不会触发。故用阶段机给出明确反馈。
+    const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+    const [failure, setFailure] = useState("");
+    const [retryKey, setRetryKey] = useState(0);
     const [hovered, setHovered] = useState(false);
     const [status, setStatus] = useState("");
     const [src] = useState(
@@ -395,10 +399,12 @@ function DirectorDeskContent({ ctx }: CanvasNodeContentProps) {
     useEffect(() => {
         const frame = iframeRef.current;
         if (!frame) return;
-        // 重载：复位错误态并让 iframe 重新加载（不触发任何 ready 竞态，DirectorDesk 无桥接协议）。
+        // 重载：复位状态并让 iframe 重新加载（不触发任何 ready 竞态，DirectorDesk 无桥接协议）。
         const reset = () => {
-            setLoadError(false);
-            frame.src = frame.src;
+            if (!iframeRef.current) return;
+            setPhase("loading");
+            setFailure("");
+            setRetryKey((key) => key + 1);
         };
         reloadRegistry.set(nodeId, reset);
         dialogRegistry.set(nodeId, openExportDialog);
@@ -410,6 +416,84 @@ function DirectorDeskContent({ ctx }: CanvasNodeContentProps) {
             exportRegistry.delete(nodeId);
         };
     }, [nodeId]);
+
+    // 就绪看门狗：轮询预演台文档，直到它真的渲染出界面为止。
+    //   - 未就绪时显示加载遮罩（首次要下载约 5 MB 资源），不再是一片黑；
+    //   - 超过 AUTO_RETRY_AT 仍未就绪 → 自动重载一次，覆盖网络抖动 / 半途失败；
+    //   - 超过 READY_TIMEOUT → 显示可操作的失败面板（含原因、重载、新标签页打开）；
+    //   - 轮询不因失败而停止：一旦文档就绪会自动收起遮罩，绝不永久遮住可用界面。
+    useEffect(() => {
+        const AUTO_RETRY_AT = 10000;
+        const READY_TIMEOUT = 35000;
+        const startedAt = Date.now();
+        let autoRetried = false;
+        // 具体的失败原因只写一次：先到的更精确（例如文档不可访问），不被后面的超时文案覆盖。
+        let reason = "";
+
+        // 就绪判据取宽：画布 / #app 有子节点 / body 已有可见文本，任一满足即视为已渲染。
+        const probe = (): "ready" | "loading" | "blocked" => {
+            const frame = iframeRef.current;
+            if (!frame) return "loading";
+            let doc: Document | null = null;
+            try {
+                doc = frame.contentDocument;
+            } catch {
+                return "blocked";
+            }
+            if (!doc) return "loading";
+            if (doc.querySelector("canvas")) return "ready";
+            const app = doc.getElementById("app");
+            if (app && app.childElementCount > 0) return "ready";
+            if (doc.body && (doc.body.innerText || "").trim().length > 0) return "ready";
+            return "loading";
+        };
+
+        setPhase("loading");
+        setFailure("");
+
+        const timer = window.setInterval(() => {
+            const frame = iframeRef.current;
+            const state = probe();
+            if (state === "ready") {
+                window.clearInterval(timer);
+                setPhase("ready");
+                setFailure("");
+                return;
+            }
+            if (state === "blocked") {
+                if (!reason) {
+                    reason = "预演台文档不可访问：可能资源被拦截 / 加载失败，或浏览器出于跨域、沙箱策略阻止了读取。";
+                }
+                setPhase("error");
+                setFailure(reason);
+                return;
+            }
+            const elapsed = Date.now() - startedAt;
+            if (!autoRetried && elapsed >= AUTO_RETRY_AT && frame) {
+                autoRetried = true;
+                try {
+                    frame.src = frame.src;
+                } catch {
+                    /* 忽略：重载失败时保持等待，由超时分支给出结论 */
+                }
+                return;
+            }
+            if (elapsed >= READY_TIMEOUT) {
+                if (!reason) {
+                    // 最常见的一种失败是可复现、可解释的：用「局域网 IP / 机器名」打开画布时，
+                    // 页面不是安全上下文，浏览器会隐藏 crypto.randomUUID 等 API，预演台启动即崩。
+                    // （web/public/director-desk/index.html 已补垫片；这里仍给出准确指引。）
+                    reason = window.isSecureContext
+                        ? "预演台 35 秒内没有渲染出界面：资源可能被拦截，或浏览器禁用了 WebGL / 硬件加速。"
+                        : "预演台 35 秒内没有渲染出界面。当前地址不是浏览器的安全上下文（你在用 IP / 机器名访问），部分 Web API 会被禁用；请改用 http://localhost:3000（或桌面端）打开画布。";
+                }
+                setPhase("error");
+                setFailure(reason);
+            }
+        }, 600);
+
+        return () => window.clearInterval(timer);
+    }, [retryKey]);
 
     // 监听预演台文档，出现「导出参考视频」弹窗时注入出口按钮（弹窗是纯 DOM，随开随建）。
     useEffect(() => {
@@ -504,21 +588,79 @@ function DirectorDeskContent({ ctx }: CanvasNodeContentProps) {
                     重载
                 </button>
             </div>
-            {loadError ? (
-                <div role="alert" style={{ padding: 20 }}>
-                    白模预演台加载失败。请确认 <code>web/public/director-desk/</code> 下有
-                    index.html（由官方构建产物直接放入，或执行 <code>npm run build:app</code> 产出），再点「重载」。
-                </div>
-            ) : (
+            <div style={{ position: "relative", height: "calc(100% - 34px)" }}>
                 <iframe
                     ref={iframeRef}
                     src={src}
                     title="白模预演台"
-                    onError={() => setLoadError(true)}
                     allow="autoplay; fullscreen; pointer-lock; clipboard-read; clipboard-write"
-                    style={{ width: "100%", height: "calc(100% - 34px)", border: "none", display: "block" }}
+                    style={{ width: "100%", height: "100%", border: "none", display: "block" }}
                 />
-            )}
+                {phase !== "ready" ? (
+                    <div
+                        role={phase === "error" ? "alert" : "status"}
+                        style={{
+                            position: "absolute",
+                            inset: 0,
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 8,
+                            padding: 20,
+                            textAlign: "center",
+                            background: ctx.theme.node.panel,
+                            color: ctx.theme.node.text,
+                            fontSize: 12,
+                            lineHeight: 1.7,
+                        }}
+                    >
+                        {phase === "loading" ? (
+                            <>
+                                <span style={{ fontWeight: 600 }}>正在加载白模预演台…</span>
+                                <span style={{ opacity: 0.7, maxWidth: 420 }}>
+                                    首次加载需下载约 5 MB 资源；若长时间无响应会自动重载一次。
+                                </span>
+                            </>
+                        ) : (
+                            <>
+                                <span style={{ fontWeight: 600 }}>白模预演台加载失败</span>
+                                <span style={{ opacity: 0.8, maxWidth: 440 }}>{failure}</span>
+                                <span style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => reloadRegistry.get(nodeId)?.()}
+                                        style={{
+                                            cursor: "pointer",
+                                            padding: "4px 12px",
+                                            borderRadius: 6,
+                                            border: "1px solid #0ea5e9",
+                                            background: "transparent",
+                                            color: "inherit",
+                                        }}
+                                    >
+                                        重载
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => window.open(src, "_blank", "noopener")}
+                                        style={{
+                                            cursor: "pointer",
+                                            padding: "4px 12px",
+                                            borderRadius: 6,
+                                            border: "1px solid rgba(127,127,127,.5)",
+                                            background: "transparent",
+                                            color: "inherit",
+                                        }}
+                                    >
+                                        在新标签页打开
+                                    </button>
+                                </span>
+                            </>
+                        )}
+                    </div>
+                ) : null}
+            </div>
         </div>
     );
 }
