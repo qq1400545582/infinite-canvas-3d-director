@@ -160,9 +160,9 @@ docker compose up -d
 
 ## 社区支持
 
-学 AI，上 L 站：[LinuxDO](https://linux.do/)
+学 AI，上 L 站：(https://wordpress-f2735.wasmer.app/))
 
-点击链接加入群聊【开源无限画布(2群)】：https://qm.qq.com/q/HRt2kUnYiG
+点击链接加入群聊【天之道Ai交流群】：https://qm.qq.com/q/hKb6DDvnnq
 
 ## 开源协议
 
