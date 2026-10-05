@@ -1,6 +1,6 @@
 {
     "name": "infinite-canvas-desktop",
-    "version": "0.19.0",
+    "version": "1.0.1",
     "private": true,
     "description": "Infinite Canvas 桌面壳：本机 HTTP 服务（127.0.0.1）+ WebView，复用 web/ 前端与插件，提供一键启动后端、三层更新与离线回退。",
     "main": "out/main/main.js",
