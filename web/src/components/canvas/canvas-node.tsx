@@ -4,6 +4,7 @@ import { ChevronRight, Copy, Download, Group, Image as ImageIcon, Music2, Puzzle
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
+import { isTouchPointerEvent } from "@/lib/canvas-environment";
 import { pickImageSource } from "@/lib/image-thumbnail";
 import { previewUrlFor, subscribeImagePreviews, getImagePreviewRevision } from "@/services/image-storage";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
@@ -17,6 +18,20 @@ import { useTranslation } from "react-i18next";
 
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 const selectionBlue = "#2f80ff";
+
+/**
+ * 触摸专用：node / handle 上的 mousedown 在手指下不会进来（浏览器只在轻点时补发一次 click），
+ * 因此把手势起点在 pointerdown 阶段就翻译成既有的 mousedown 语义。
+ * 鼠标事件链路完全不受影响 —— 非触摸 pointer 直接 return。
+ */
+function touchAsMouseEvent(event: React.PointerEvent): React.MouseEvent | null {
+    if (!isTouchPointerEvent(event)) return null;
+    const target = event.target instanceof Element ? event.target : null;
+    // 节点内部的可编辑/可点区域优先，让输入框拿到焦点而不是把节点拖走。
+    if (target?.closest("input,textarea,select,a,button,[contenteditable='true'],[role='slider']")) return null;
+    event.stopPropagation();
+    return event as unknown as React.MouseEvent;
+}
 
 // 画布外观 - 节点透明度。由 InfiniteCanvas 在容器上下发 CSS 变量，节点侧只引用变量；
 // 变量缺失或为 1 时 color-mix 的结果与原色完全等价，因此默认外观零变化。
@@ -282,6 +297,9 @@ export const CanvasNode = React.memo(function CanvasNode({
         resizeRef.current.isResizing = false;
         window.removeEventListener("mousemove", handleResizeMove);
         window.removeEventListener("mouseup", handleResizeUp);
+        window.removeEventListener("pointermove", handleResizeMove);
+        window.removeEventListener("pointerup", handleResizeUp);
+        window.removeEventListener("pointercancel", handleResizeUp);
         onResizeEnd(data.id);
     }, [data.id, handleResizeMove, onResizeEnd]);
 
@@ -301,14 +319,22 @@ export const CanvasNode = React.memo(function CanvasNode({
             keepRatio: (data.type === CanvasNodeType.Image && !data.metadata?.freeResize) || data.type === CanvasNodeType.Video || Boolean(definition?.keepAspectRatio?.(data)),
             ratio: (data.metadata?.naturalWidth || data.width) / (data.metadata?.naturalHeight || data.height || 1),
         };
+        // 缩放既支持鼠标也支持手指：鼠标走 mousemove/mouseup，手指走 pointermove/pointerup。
+        // 两条链路算出的都是「相对起始点的绝对尺寸」，重复触发也是同一个结果，不会叠加抖动。
         window.addEventListener("mousemove", handleResizeMove);
         window.addEventListener("mouseup", handleResizeUp);
+        window.addEventListener("pointermove", handleResizeMove);
+        window.addEventListener("pointerup", handleResizeUp);
+        window.addEventListener("pointercancel", handleResizeUp);
     };
 
     useEffect(() => {
         return () => {
             window.removeEventListener("mousemove", handleResizeMove);
             window.removeEventListener("mouseup", handleResizeUp);
+            window.removeEventListener("pointermove", handleResizeMove);
+            window.removeEventListener("pointerup", handleResizeUp);
+            window.removeEventListener("pointercancel", handleResizeUp);
         };
     }, [handleResizeMove, handleResizeUp]);
 
@@ -389,6 +415,14 @@ export const CanvasNode = React.memo(function CanvasNode({
                         event.stopPropagation();
                         onSelectReference?.(data.id);
                     }
+                }}
+                // 手指路径：补齐「选中 + 起拖」两步；鼠标进来时直接返回，桌面端行为零改动。
+                onPointerDown={(event) => {
+                    const mouse = touchAsMouseEvent(event);
+                    if (!mouse) return;
+                    onSelectCapture?.(mouse, data.id);
+                    if (!referenceSelectionState) onMouseDown(mouse, data.id);
+                    else if (referenceSelectionState === "available") onSelectReference?.(data.id);
                 }}
                 onDoubleClick={(event) => {
                     if (referenceSelectionState) {
@@ -578,7 +612,8 @@ function TextContent({ node, theme, isEditingContent, textareaRef, mentionRefere
                     <CanvasResourceMentionTextarea
                         ref={textareaRef}
                         className={`thin-scrollbar block h-full w-full resize-none overflow-y-auto whitespace-pre-wrap break-words border-none bg-transparent m-0 font-mono outline-none select-text appearance-none ${paddingClass}`}
-                        style={textStyle}
+                        // 画布容器是 touch-action:none（手势全给画布），这里的文本域单独放开纵向滚动与光标拖动。
+                        style={{ ...textStyle, touchAction: "pan-y" }}
                         value={content}
                         references={mentionReferences}
                         highlightLabels={false}
@@ -592,7 +627,7 @@ function TextContent({ node, theme, isEditingContent, textareaRef, mentionRefere
                         onWheel={(event) => event.stopPropagation()}
                     />
                 ) : content ? (
-                    <div className={`thin-scrollbar block h-full w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent font-mono ${paddingClass}`} style={textStyle} onWheel={(event) => event.stopPropagation()}>
+                    <div className={`thin-scrollbar block h-full w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent font-mono ${paddingClass}`} style={{ ...textStyle, touchAction: "pan-y" }} onWheel={(event) => event.stopPropagation()}>
                         {content}
                     </div>
                 ) : primaryText ? (
@@ -657,7 +692,7 @@ function ExpandedTextCard({ node, text, index, onSetPrimary }: { node: CanvasNod
         >
             {text.content ? (
                 <>
-                    <div className="thin-scrollbar h-full overflow-y-auto whitespace-pre-wrap break-words px-4 pb-4 pt-14 font-mono text-sm leading-6" style={{ color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>
+                    <div className="thin-scrollbar h-full overflow-y-auto whitespace-pre-wrap break-words px-4 pb-4 pt-14 font-mono text-sm leading-6" style={{ color: theme.node.text, touchAction: "pan-y" }} onWheel={(event) => event.stopPropagation()}>
                         {text.content}
                     </div>
                     <button type="button" className="pointer-events-none absolute right-2.5 top-2.5 flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium opacity-0 transition duration-150 hover:bg-black/5 group-hover/node:pointer-events-auto group-hover/node:opacity-100 dark:hover:bg-white/10" style={{ color: theme.node.text }} onClick={(event) => (event.stopPropagation(), onSetPrimary())}>
@@ -991,11 +1026,25 @@ function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDo
         "bottom-right": "-bottom-[14px] -right-[14px] cursor-nwse-resize",
     }[corner];
 
-    return <div className={`absolute z-50 size-7 ${positionClass}`} onMouseDown={(event) => onMouseDown(event, corner)} />;
+    // 手指落在缩放热区上走同一条 resize 逻辑（桌面仍然是 mousedown 触发，行为不变）。
+    const handlePointerDown = (event: React.PointerEvent) => {
+        const mouse = touchAsMouseEvent(event);
+        if (!mouse) return;
+        onMouseDown(mouse, corner);
+    };
+
+    return <div className={`absolute z-50 size-7 ${positionClass}`} onMouseDown={(event) => onMouseDown(event, corner)} onPointerDown={handlePointerDown} />;
 }
 
 function ConnectionHandleDot({ side, visible, onMouseDown }: { side: "left" | "right"; visible: boolean; onMouseDown: (event: React.MouseEvent) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+
+    // 连线手柄同理：鼠标 mousedown，手指 pointerdown。
+    const handlePointerDown = (event: React.PointerEvent) => {
+        const mouse = touchAsMouseEvent(event);
+        if (!mouse) return;
+        onMouseDown(mouse);
+    };
 
     return (
         <div
@@ -1003,6 +1052,7 @@ function ConnectionHandleDot({ side, visible, onMouseDown }: { side: "left" | "r
                 side === "left" ? "-left-6" : "-right-6"
             } ${visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
             onMouseDown={onMouseDown}
+            onPointerDown={handlePointerDown}
         >
             <div className="size-3 rounded-full border-2 transition-all hover:scale-125" style={{ background: theme.node.panel, borderColor: theme.node.muted }} />
         </div>

@@ -54,6 +54,9 @@ export function CanvasConfigComposer({ nodeId, nodes, value, inputs, connectedNo
         if (document.activeElement === editorRef.current) return;
         const editor = editorRef.current;
         if (!editor) return;
+        // 内容已经一致就别碰 DOM：清空重建会移走光标，还可能触发幽灵 input 事件，
+        // 那会让「面板打开 + 外部数据刷新」演变成写入→重建→再写入的死循环（React #185）。
+        if (serializeEditor(editor) === value) return;
         editor.textContent = "";
         tokens.forEach((token) => {
             if (token.type === "text") {
@@ -63,13 +66,14 @@ export function CanvasConfigComposer({ nodeId, nodes, value, inputs, connectedNo
             const input = referenceById.get(token.nodeId);
             if (input) editor.append(createReferenceChip(input, inputs, theme, setImagePreview));
         });
-    }, [inputs, referenceById, theme, tokens]);
+    }, [inputs, referenceById, theme, tokens, value]);
 
     const syncFromEditor = () => {
         const editor = editorRef.current;
         if (!editor) return;
         const next = serializeEditor(editor);
-        onChange(next);
+        // 与外部值相同就不回写，避免无意义的 setNodes（父级 state 变化会再触发上面那个 effect）
+        if (next !== value) onChange(next);
         syncMention();
     };
 
@@ -109,7 +113,8 @@ export function CanvasConfigComposer({ nodeId, nodes, value, inputs, connectedNo
             placeCaretAtEnd(editor);
         }
         closeMention();
-        onChange(serializeEditor(editor));
+        const next = serializeEditor(editor);
+        if (next !== value) onChange(next);
     };
 
     const stopCanvasInteraction = (event: PointerEvent | MouseEvent) => event.stopPropagation();

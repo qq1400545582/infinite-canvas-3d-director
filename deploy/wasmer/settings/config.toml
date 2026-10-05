@@ -1,0 +1,108 @@
+# static-web-server 配置：等价于仓库根 nginx.conf + Dockerfile 提供的服务契约
+#
+# ── 两个实测结论（别再踩）────────────────────────────────────────────
+# 1) Wasmer 官方预编译的 wasmer/static-web-server（1.1.0 / SWS 2.32.2）**没有编译
+#    `fallback-page` 特性**，config.toml 里写 page-fallback 会被明确告警：
+#      Warning: unused configuration manifest key "general.page-fallback" or unsupported
+#    该包全部 7 个版本都只有一个 webserver 入口，没有开了该特性的变体。
+#    所以 SPA 回退只能用 `page404`（把 404 的响应体换成 index.html）：
+#      → 深链刷新能正常渲染应用
+#      → 但 HTTP 状态码是 404（不是 nginx try_files 的 200），搜索引擎不会收录深链
+#    想拿到 200 只能自建一个 WASI HTTP server 顶掉这个依赖，无法靠配置解决。
+# 2) 本地预览必须带 `--net`，否则 WASIX 拿不到网络权限，绑定端口会以
+#    "failed to bind to ... / Not supported (os error 58)" 失败——与 host 无关。
+
+[general]
+
+# 与 Wasmer 官方模板一致（SWS 默认也是 "::"）
+host = "::"
+port = 8080
+root = "/public"
+
+log-level = "error"
+
+# 关掉内置的「按扩展名下发 max-age」表。
+# 原因：SPA 回退响应（深链命中的 404）会被它按 text/html 打上 max-age=86400，
+# 发版后 24 小时内深链刷新可能命中旧的 index.html，而它引用的旧 hash 资源已经不存在。
+# 关掉后只对「确定安全」的路径显式声明缓存（见 [advanced.headers]），
+# 未声明的路径不下发 Cache-Control，也不会被启发式长期缓存。
+cache-control-headers = false
+
+# 文本类资源按 Accept-Encoding 实时压缩
+compression = true
+# 产物里没有 .br/.gz 预压缩副本，此项保持关闭
+compression-static = false
+
+# SPA 回退：等价 nginx 的 try_files $uri $uri/ /index.html（状态码差异见文件头说明）
+page404 = "./index.html"
+
+index-files = "index.html"
+directory-listing = false
+redirect-trailing-slash = false
+
+# Edge 上实例随时会被替换，给一点优雅退出时间
+grace-period = 5
+
+[advanced]
+
+# ── 实验：强制每个响应都关闭连接 ────────────────────────────────────
+# 本机 `wasmer run --net` 的 WASIX 运行时有个已实测的缺陷：
+#   同一条连接上的第二个请求永远不会被处理，且服务器不关闭连接
+#   → 浏览器复用连接后整个页面永久挂起（首个请求正常，后续全部 pending）
+# 让它每个响应都 `Connection: close`，客户端就会每次新建连接，从而绕开。
+[[advanced.headers]]
+source = "**"
+[advanced.headers.headers]
+Connection = "close"
+
+# ── 缓存规则 ────────────────────────────────────────────────────────
+# 所有 wasm（openreel 的 onnx 运行时，共 43MB）都是 hash 命名，可长期缓存。
+# 显式声明 MIME，避免 WebAssembly.instantiateStreaming 因 content-type 被卡。
+[[advanced.headers]]
+source = "**/*.wasm"
+[advanced.headers.headers]
+Content-Type = "application/wasm"
+Cache-Control = "public, max-age=31536000, immutable"
+
+# 四个子应用（主站 / openreel-video / director-desk / jlmlh-3d-director）的
+# assets 目录全部是 hash 命名 → 可长期缓存
+[[advanced.headers]]
+source = "/assets/*"
+[advanced.headers.headers]
+Cache-Control = "public, max-age=31536000, immutable"
+
+[[advanced.headers]]
+source = "/*/assets/*"
+[advanced.headers.headers]
+Cache-Control = "public, max-age=31536000, immutable"
+
+# 入口文档：一律先回源校验，保证发版即时生效
+# （`/` 会被 SWS 归一化成 /index.html 再匹配，所以这一条同时覆盖首页；
+#   三个子应用的 index.html 由下面的 **/index.html 覆盖）
+[[advanced.headers]]
+source = "/index.html"
+[advanced.headers.headers]
+Cache-Control = "no-cache"
+
+[[advanced.headers]]
+source = "**/index.html"
+[advanced.headers.headers]
+Cache-Control = "no-cache"
+
+# 运行期配置：禁止缓存，改完即时生效（等价 nginx 的 location = /config.js no-store）
+[[advanced.headers]]
+source = "/config.js"
+[advanced.headers.headers]
+Cache-Control = "no-store"
+
+# 插件 bundle 与其清单不是 hash 命名，必须能及时更新
+[[advanced.headers]]
+source = "/plugins/*"
+[advanced.headers.headers]
+Cache-Control = "no-cache"
+
+# 三层更新的清单文件，同理
+[[advanced.headers]]
+source = "/build-manifest.json"
+[advanced.headers.headers]
+Cache-Control = "no-cache"

@@ -19,7 +19,7 @@ import { WorkbenchContent, workbenchRegistries } from "./workbench";
 export default definePlugin({
     id: PLUGIN_ID,
     name: "分镜工作台",
-    version: "1.1.0",
+    version: "1.2.0",
     description: "分镜工作台：内置 cinematic-storyboard-design Skill（clipshot），把剧本拆成可自定义格数（默认九宫格）的制作型分镜与逐格提示词，并可连接下游「分镜出图」节点按分镜序列自动出图",
     nodes: [
         {

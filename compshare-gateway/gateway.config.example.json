@@ -1,0 +1,41 @@
+{
+  "_说明": [
+    "把这个文件复制成 gateway.config.json 再按需改。",
+    "port 必须是实例对外暴露的那个端口。画布的「接入画布」按钮探测的是 8000，",
+    "所以想让一键接入生效，网关就监听 8000，并把 vllm_base 指向 vLLM 实际所在端口。",
+    "只想手动加渠道（偏好设置 → 渠道 → 新建，baseUrl 填 http://<实例域名>:<port>）的话，",
+    "port 可以用任意没被占的端口，比如 8188。"
+  ],
+
+  "host": "0.0.0.0",
+  "port": 8000,
+
+  "comfy_base": "http://127.0.0.1:6006",
+  "vllm_base": "http://127.0.0.1:8002",
+  "vllm_api_key": "sk-mycanvas-2026",
+
+  "request_timeout": 600,
+  "poll_interval": 1.0,
+  "max_poll_seconds": 900,
+  "keep_files_seconds": 3600,
+
+  "workflows": [
+    {
+      "id": "sd15-txt2img",
+      "capability": "image",
+      "label": "SD1.5 文生图（ComfyUI）",
+      "workflow": "workflows/example-sd15-txt2img.json",
+      "mappings": {
+        "prompt": "6.inputs.text",
+        "negative_prompt": "7.inputs.text",
+        "seed": "3.inputs.seed",
+        "width": "5.inputs.width",
+        "height": "5.inputs.height",
+        "steps": "3.inputs.steps",
+        "cfg": "3.inputs.cfg"
+      },
+      "output_node": "9",
+      "defaults": { "steps": 28, "cfg": 6.5 }
+    }
+  ]
+}

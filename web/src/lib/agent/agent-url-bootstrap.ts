@@ -13,3 +13,8 @@ export function readAgentUrlBootstrap(hash: string) {
     const remaining = params.toString();
     return { url, token, remainingHash: remaining ? `#${remaining}` : "" };
 }
+
+/** 读取打开方声明的平台标识（`source=codex|dsh|workbuddy|trae…`），未声明时返回空串。 */
+export function readAgentPlatformSource(hash: string) {
+    return new URLSearchParams(hash.replace(/^#/, "")).get("source")?.trim() || "";
+}

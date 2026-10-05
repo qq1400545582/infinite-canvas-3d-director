@@ -14,7 +14,8 @@
         "web/vite-plugins/",
         "web/src/components/layout/online-update-panel.tsx",
         "scripts/",
-        "second-dev/"
+        "second-dev/",
+        "deploy/"
     ],
     "excluded": [
         "_jlmlh-extract/",

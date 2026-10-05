@@ -607,3 +607,40 @@
     border-radius: 0.6rem;
     font-size: 0.75rem;
 }
+
+/* 太极图主节点选择器：中心阴阳鱼缓慢旋转（仅 rotate；居中由 inset-0 + margin:auto 负责，
+   不能在 keyframes 里带 translate——Tailwind v4 的 translate 工具类是独立属性，会叠加成双重偏移） */
+@keyframes bagua-taiji-spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* —— 移动端/触屏自适应底座 ——
+   三条规则都只针对触屏观感，桌面浏览器的表现与之前一致。 */
+html,
+body {
+    /* 手机下拉刷新、橡皮筋回弹：画布是满屏应用，不需要 page-level 惯性 */
+    overscroll-behavior: none;
+    /* 手指按下时的灰色高亮块在画布上很难看 */
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* 画布节点内部：长按不弹系统「拷贝/放大镜」菜单，避免干扰拖拽 */
+.node-element {
+    -webkit-touch-callout: none;
+}
+
+/* 刘海屏/底部小白条环境的安全区内边距（配合 HTML 的 viewport-fit=cover） */
+@supports (padding: env(safe-area-inset-bottom)) {
+    .pb-safe {
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .pt-safe {
+        padding-top: env(safe-area-inset-top);
+    }
+}

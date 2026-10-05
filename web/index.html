@@ -2,7 +2,15 @@
 <html lang="zh-CN" class="font-sans">
     <head>
         <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <!-- 自适应底座：
+             - width=device-width + initial-scale=1：手机/平板按真实 CSS 像素铺满；
+             - viewport-fit=cover：刘海机/全面屏内容延伸到安全区之外（配合下方 tab bar 的 safe-area padding）；
+             - maximum-scale + user-scalable=no：浏览器自身的双指缩放交给画布手势处理，
+               否则「系统缩放」与「画布缩放」会互相抢手势（iOS 仍可能因辅助功能忽略此项，
+               因此画布容器额外加 touch-action: none 兜底）。 -->
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="description" content="一个无限画布创作工具" />
         <link rel="icon" href="/logo.svg" />
         <title>无限画布</title>

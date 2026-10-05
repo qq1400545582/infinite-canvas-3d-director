@@ -112,7 +112,8 @@ export function ensurePluginsLoaded(): Promise<void> {
 
 async function loadInstalledPlugins() {
     await usePluginStore.persist.rehydrate();
-    const discovered = await loadLocalPlugins();
+    const { discovered, manifestLoaded } = await loadLocalPlugins();
+    if (manifestLoaded) pruneStaleLocalPlugins(discovered);
     markPresetFixDone(); // 一次性 id 修正已生效，之后不再介入用户的开关
     const records = usePluginStore.getState().plugins.filter((record) => record.enabled);
     await Promise.all(
@@ -168,17 +169,19 @@ function resolveEnabled(id: string, existingEnabled?: boolean) {
 
 // Discover local plugins from web/public/plugins, add them disabled, and expose them in the manager without a URL.
 // Refresh metadata and source for existing records while preserving the enabled flag so persisted versions stay current.
-async function loadLocalPlugins() {
+// manifestLoaded = 本轮真的读到了 /plugins/index.json —— 读不到（离线/服务未起）时返回 false，
+// 调用方据此跳过陈旧记录清理，避免把「暂时没发现」误判成「已被移除」而清光全部本地插件。
+async function loadLocalPlugins(): Promise<{ discovered: Map<string, CanvasPlugin>; manifestLoaded: boolean }> {
     const discovered = new Map<string, CanvasPlugin>();
     let urls: unknown;
     try {
         const response = await fetch("/plugins/index.json");
-        if (!response.ok) return discovered;
+        if (!response.ok) return { discovered, manifestLoaded: false };
         urls = await response.json();
     } catch {
-        return discovered; // No local manifest, such as production builds without plugins.
+        return { discovered, manifestLoaded: false }; // No local manifest, such as production builds without plugins.
     }
-    if (!Array.isArray(urls) || !urls.length) return discovered;
+    if (!Array.isArray(urls) || !urls.length) return { discovered, manifestLoaded: true };
     await Promise.all(
         urls.map(async (url: string) => {
             try {
@@ -202,7 +205,20 @@ async function loadLocalPlugins() {
             }
         }),
     );
-    return discovered;
+    return { discovered, manifestLoaded: true };
+}
+
+// 清掉「上一版还在发现清单里、这轮已消失」的本地内置插件记录（例如下架的 img2threejs）。
+// 只动 local 记录（仅 loadLocalPlugins 会打 local: true）；第三方（按 URL 安装）的记录一律保留。
+// 前置条件：本轮 manifest 确实加载成功（见 loadLocalPlugins 的 manifestLoaded）。
+function pruneStaleLocalPlugins(discovered: Map<string, CanvasPlugin>) {
+    const store = usePluginStore.getState();
+    const stale = store.plugins.filter((record) => record.local && !discovered.has(record.id));
+    for (const record of stale) {
+        deactivatePlugin(record.id);
+        store.remove(record.id);
+        console.info(`[plugin] Removed stale local plugin record: ${record.id}`);
+    }
 }
 
 // During local development, refetch VITE_DEV_PLUGINS URLs without caching or persistence on every startup.

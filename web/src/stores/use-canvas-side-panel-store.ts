@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import { isCoarsePointer, isCompactViewport } from "@/lib/canvas-environment";
+
 export const CANVAS_SIDE_PANEL_MOTION_MS = 500;
 export const CANVAS_SIDE_PANEL_MIN_WIDTH = 220;
 export const CANVAS_SIDE_PANEL_MAX_WIDTH = 480;
@@ -15,9 +17,15 @@ function initialWidth() {
     return Math.min(CANVAS_SIDE_PANEL_MAX_WIDTH, Math.max(CANVAS_SIDE_PANEL_MIN_WIDTH, stored));
 }
 
+/**
+ * 自适应默认：窄屏或手指优先的设备上，默认收起侧栏，把整块屏幕让给画布（用户仍可一键展开）。
+ * 只要用户自己切换过（localStorage 里有值），就以用户的决定为准，不再自动改变。
+ */
 function initialOpen() {
     if (typeof window === "undefined") return true;
-    return localStorage.getItem(OPEN_KEY) !== "0";
+    const stored = localStorage.getItem(OPEN_KEY);
+    if (stored !== null) return stored !== "0";
+    return !(isCompactViewport() || isCoarsePointer());
 }
 
 type CanvasSidePanelStore = {

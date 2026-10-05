@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CodexAppClient } from "./codex-client.js";
+import { CodexAppClient, appServerExitMessage } from "./codex-client.js";
 import { assertDraftHasNoSensitiveValues, canvasSkillSource } from "./codex.js";
 
 type TestClient = {
@@ -940,3 +940,17 @@ function eventScope(payload: unknown) {
 function eventType(payload: unknown) {
     return payload && typeof payload === "object" ? (payload as Record<string, unknown>).type : undefined;
 }
+
+// 退出提示要能读出「发生了什么 / 该做什么」，且不能写死某个平台、不能把原生十进制码直接甩给用户。
+test("后台进程退出提示为中性可读文案", () => {
+    const crashed = appServerExitMessage(3221225477);
+    assert.match(crashed, /0xC0000005/);
+    assert.match(crashed, /已自动重启/);
+    assert.match(crashed, /重发上一条消息/);
+    assert.doesNotMatch(crashed, /3221225477/);
+    assert.doesNotMatch(crashed, /Codex/i);
+
+    assert.match(appServerExitMessage(null), /已自动重启/);
+    assert.doesNotMatch(appServerExitMessage(null), /异常退出/);
+    assert.match(appServerExitMessage(1), /异常退出（1）/);
+});

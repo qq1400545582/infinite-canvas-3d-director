@@ -1,0 +1,31 @@
+# Wasmer Edge 打包清单（静态站）
+# 参考官方模板：https://docs.wasmer.io/edge/guides/cdn
+# 包内容 = web/dist（前端产物） + settings/config.toml（服务契约）
+#
+# 注意：name 的第一段是 Wasmer 命名空间（= 账号名），换账号部署时改这里 + app.yaml。
+
+[package]
+name = "1400545582/infinite-canvas-3d-director"
+version = "0.1.0"
+description = "Infinite Canvas - static web app (Vite build output) served by static-web-server"
+
+[dependencies]
+"wasmer/static-web-server" = "^1"
+
+[fs]
+# 直接映射仓库里的 Vite 产物目录，不做拷贝，保证永远是最新构建。
+# 必须先 cd 到本目录再执行（相对路径按工作目录解析）：
+#   cd deploy/wasmer && wasmer run . --net     # 本地预览（--net 必须带，否则绑不上端口）
+#   cd deploy/wasmer && wasmer deploy          # 发布到 Edge
+"/public" = "../../web/dist"
+"/settings" = "settings"
+
+[[command]]
+name = "script"
+module = "wasmer/static-web-server:webserver"
+# 官方老模板这里写的是 https://webc.org/runner/wasi，但 webc.org 域名已失效（DNS NXDOMAIN）。
+# 按清单文档，runner 也可以用 well-known 名："wasi" / "wcgi" / "wasm4"。
+runner = "wasi"
+
+[command.annotations.wasi]
+main-args = ["-w", "/settings/config.toml"]

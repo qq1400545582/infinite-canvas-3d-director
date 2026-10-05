@@ -16,4 +16,6 @@ interface ImportMetaEnv {
     readonly VITE_DESKTOP_DOWNLOAD_URL?: string;
     // Repository (owner/repo) holding desktop releases; defaults to the desktop build.publish target.
     readonly VITE_DESKTOP_RELEASES_REPO?: string;
+    // Project repository opened by the top-nav GitHub entry. Defaults to the secondary-development repo.
+    readonly VITE_REPO_URL?: string;
 }

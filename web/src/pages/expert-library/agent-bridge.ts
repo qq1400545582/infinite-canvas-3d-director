@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import {
     createCodexSkill,
     discoverAgentConfig,
@@ -69,9 +70,37 @@ export async function listAgentSkills(): Promise<AgentSkillSummary[] | null> {
     }
 }
 
+/** 轻量探测本机 Agent 是否可达（`/config` 免鉴权，与连接发现走同一通路）。 */
+export async function agentEndpointReachable(endpoint: string, timeoutMs = 4000): Promise<boolean> {
+    try {
+        const response = await fetch(`${endpoint}/config`, { signal: AbortSignal.timeout(timeoutMs) });
+        return response.ok;
+    } catch {
+        return false;
+    }
+}
+
+/** 等待本机 Agent 就绪（Agent 冷启动需要数秒），轮询若干次后仍不可达返回 false。 */
+export async function waitForAgentEndpoint(endpoint: string, attempts = 4, intervalMs = 2000): Promise<boolean> {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+        if (await agentEndpointReachable(endpoint)) return true;
+        if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    return false;
+}
+
 /** 把一条技能写入本机 Agent 的 SkillStore（真正安装到本机）。 */
 export async function installAgentSkill(target: AgentTarget, input: AgentSkillInput) {
-    return await createCodexSkill(target.endpoint, target.token, input);
+    try {
+        return await createCodexSkill(target.endpoint, target.token, input);
+    } catch (error) {
+        // fetch 的网络层失败（连接拒绝 / CORS 等）抛的是 TypeError “Failed to fetch”，
+        // 这里转成可行动的中文提示，而不是把浏览器原始报错透给用户。
+        if (error instanceof TypeError) {
+            throw new Error(i18n.t("expertLibrary.addSkill.agentUnreachable", { endpoint: target.endpoint }));
+        }
+        throw error;
+    }
 }
 
 /** 在已加载的技能清单中按名称 / id 找到同名技能，用于「调用」时选中 `$skill` 标记。 */

@@ -33,3 +33,10 @@ desktop/electron.vite.config.*.mjs
 # 注意：plugins/canvas/*/node_modules 只能忽略一层，官方 app 自带 node_modules/dist 需用 ** 递归
 plugins/canvas/**/node_modules/
 plugins/canvas/**/dist/
+
+# 本机 agent 工作数据（本地记忆 / 临时脚本，非项目源码，不随仓库分发）
+.workbuddy/
+
+# Python 缓存（网关等脚本产物的字节码，非源码）
+__pycache__/
+*.pyc

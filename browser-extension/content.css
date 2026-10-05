@@ -1,0 +1,57 @@
+/* 悬浮发送按钮与提示条：全部加 icx- 前缀并使用高 z-index，避免与页面样式互相污染。 */
+
+.icx-send-button {
+    position: absolute;
+    z-index: 2147483000;
+    display: none;
+    align-items: center;
+    gap: 4px;
+    height: 26px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(23, 23, 23, 0.9);
+    color: #fff;
+    font: 500 12px/26px -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    letter-spacing: 0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+    opacity: 0.94;
+    transition: opacity 0.15s ease;
+}
+
+.icx-send-button.icx-visible {
+    display: inline-flex;
+}
+
+.icx-send-button:hover {
+    opacity: 1;
+    background: #000;
+}
+
+.icx-toast {
+    position: fixed;
+    z-index: 2147483001;
+    right: 20px;
+    bottom: 24px;
+    max-width: 380px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(23, 23, 23, 0.92);
+    color: #fff;
+    font: 400 13px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+    opacity: 0;
+    transform: translateY(8px);
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.icx-toast.icx-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.icx-toast.icx-error {
+    background: rgba(180, 38, 38, 0.94);
+}

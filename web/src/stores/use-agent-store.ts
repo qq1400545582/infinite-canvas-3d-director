@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import i18n from "@/i18n";
 
+import { readStoredPlatformSource } from "@/lib/agent/agent-platform";
 import type { CanvasAgentOp, CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 
@@ -55,6 +56,8 @@ type AgentStore = {
     enabled: boolean;
     silentConnect: boolean;
     fragmentBootstrap: boolean;
+    /** 打开画布的平台自报的标识（URL fragment 的 `source=`，如 codex / dsh / workbuddy / trae）。 */
+    platformSource: string;
     prompt: string;
     attachments: AgentAttachment[];
     canvasReferences: CanvasResourceReference[];
@@ -107,6 +110,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     enabled: false,
     silentConnect: false,
     fragmentBootstrap: false,
+    platformSource: readStoredPlatformSource(),
     prompt: "",
     attachments: [],
     canvasReferences: [],

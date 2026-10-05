@@ -1,0 +1,25 @@
+# Wasmer Edge 应用配置
+#
+# 首次部署前把 __WASMER_OWNER__ 替换为你的 Wasmer 账号名（登录后 `wasmer whoami` 可查）。
+# 注意：纯数字的账号名必须加引号，否则 YAML 会把它解析成整数，
+# `wasmer deploy` 会报 "No owner specified"（亲测踩过）。
+kind: wasmer.io/App.v0
+owner: "1400545582"
+name: infinite-canvas-3d-director
+# 用同目录的 wasmer.toml 打包（旧写法写完整包名会被判为 deprecated 并直接报错）
+package: .
+
+description: Infinite Canvas — AI 画布与节点编排工作台（Vite 构建产物 + static-web-server）
+
+debug: false
+
+# 有意不开 cdn_cache：入口文档若被边缘缓存会导致发版不生效；
+# 资源本身已用 hash 命名 + immutable，浏览器侧缓存足够。需要时再打开。
+# capabilities:
+#   cdn_cache:
+#     enabled: true
+
+# HTTP 自动跳 HTTPS（默认就是 true，这里显式写出来避免误解）
+redirect:
+  force_https: true
+app_id: da_KE4I8tXUZQ7a

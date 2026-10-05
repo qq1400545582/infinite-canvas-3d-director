@@ -20,7 +20,7 @@ npx -y @basketikun/canvas-agent@latest
 3. 在 Codex 右侧浏览器打开：
 
 ```text
-https://canvas.best/canvas?mode=new#agentUrl=<Local URL>&agentToken=<Connect token>
+https://canvas.best/canvas?mode=new#agentUrl=<Local URL>&agentToken=<Connect token>&source=<平台标识>
 ```
 
 ## 本地版
@@ -42,8 +42,22 @@ npx -y @basketikun/canvas-agent@latest
 3. 从启动输出取得 `Local URL` 和 `Connect token`，在 Codex 右侧浏览器打开：
 
 ```text
-<Vite Local 地址>/canvas?mode=new#agentUrl=<Local URL>&agentToken=<Connect token>
+<Vite Local 地址>/canvas?mode=new#agentUrl=<Local URL>&agentToken=<Connect token>&source=<平台标识>
 ```
+
+## 平台标识（source）
+
+画布可以被任意支持 MCP 的平台打开，不限于 Codex。打开时在 fragment 里带上 `source=<平台标识>`，画布顶栏就会显示打开它的平台名；不带则显示中性的「本地 Agent」。
+
+| 平台 | source |
+| --- | --- |
+| Codex | `codex` |
+| ZCode | `zcode` |
+| DeepSeek Harness | `dsh` |
+| WorkBuddy | `workbuddy` |
+| Trae | `trae` |
+
+其它平台用各自的小写工具名即可，未登记的标识会原样显示（最长 24 个字符）。
 
 ## MCP 与连接地址
 

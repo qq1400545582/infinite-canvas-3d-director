@@ -4,6 +4,7 @@ import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 
 import { runClaudeTurn } from "../agent/claude.js";
+import { freeModelCatalogue, rejectNonFreeModel, resolveCodexDefaultEffort, resolveCodexDefaultModel } from "../agent/codex-config.js";
 import { archiveCodexThread, CodexSkillLookupError, configureCodexSkill, generateCodexSkillDraft, interruptCodexTurn, isRecoverableThreadError, listCodexModels, listCodexSkills, listCodexThreads, readCodexThread, resolveCodexApproval, resolveCodexSkill, resumeCodexThread, runCodexTurn, startCodexThread, summarizeCodexThread } from "../agent/codex.js";
 import type { CodexReasoningEffort, CodexSkillSelector } from "../agent/codex-protocol.js";
 import { messageMetadataStore } from "../agent/message-metadata.js";
@@ -13,6 +14,11 @@ import { DEFAULT_PORT, ensureSiteWorkspace, loadConfig, saveConfig, updateSiteWo
 import { logger } from "../utils/logger.js";
 import { checkVersions } from "../version-check.js";
 import { SkillStore, SkillStoreError } from "../skills/store.js";
+import { firstSkillMention, matchSkillByName } from "./skill-mention.js";
+import { registerWorkbuddySync } from "./workbuddy-sync.js";
+import { registerCompShare, registerCompShareSftp, registerCompShareImageSearch, registerCompShareProbe, compShareCredentials, normalizeSshInfo } from "./compshare-routes.js";
+import { SftpError } from "./compshare-sftp.js";
+import { describeInstances } from "./compshare.js";
 
 /** 启动仅监听本机的 Canvas Agent HTTP 服务。 */
 export function startHttpServer() {
@@ -172,9 +178,45 @@ export function startHttpServer() {
     app.post("/api/tools", route(async (req, res) => res.json({ ok: true, result: await session.callTool(req.body?.name, req.body?.input || {}) })));
     app.get("/agent/codex/workspace", (_req, res) => {
         const workspace = ensureSiteWorkspace(config);
-        res.json({ ok: true, workspace, conversation: session.conversationStateSnapshot });
+        res.json({ ok: true, workspace, conversation: session.conversationStateSnapshot, freeModels: freeModelCatalogue() });
     });
     app.get("/agent/codex/models", route(async (_req, res) => res.json({ ok: true, ...(await listCodexModels(emit)) })));
+    /**
+     * 上游模型列表代理。
+     *
+     * 上游（例如 https://api.agnes-ai.cn/v1）返回 OpenAI 兼容的 /models 列表，但该端点没有正确设置
+     * Access-Control-Allow-Origin / Allow-Headers，浏览器会把它当成 CORS 违规，`fetchChannelModels` 拿不到 body。
+     * 本机 Agent 作为中间层直接转发、把响应头改成浏览器安全合规的形式，前端只需把 baseUrl 换成 `/proxy/models`。
+     */
+    app.get("/proxy/models", route(async (req, res) => {
+        const upstream = String(req.query.upstream || "");
+        if (!/^https?:\/\//i.test(upstream)) return void res.status(400).json({ ok: false, error: "upstream must be an absolute http(s) URL" });
+        const url = new URL(upstream);
+        if (url.pathname === "/") url.pathname = "/v1/models";
+        else if (!url.pathname.endsWith("/models")) url.pathname += "/models";
+        if (!url.href.startsWith(upstream)) return void res.status(400).json({ ok: false, error: "upstream URL invalid" });
+        const authorization = String(req.headers["x-proxy-authorization"] || "");
+        const headers: Record<string, string> = { accept: "application/json" };
+        if (authorization) headers["authorization"] = authorization;
+        logger.info("proxy /models", { upstream: url.href, hasAuth: Boolean(authorization) });
+        let resp: globalThis.Response;
+        try { resp = await fetch(url.href, { method: "GET", headers }); } catch (e) {
+            logger.warn("proxy /models fetch failed", { upstream: url.href, error: e instanceof Error ? e.message : String(e) });
+            return void res.status(502).json({ ok: false, error: `upstream connect failed: ${e instanceof Error ? e.message : String(e)}` });
+        }
+        res.status(resp.status);
+        for (const [k, v] of resp.headers.entries()) {
+            const lk = k.toLowerCase();
+            if (lk.startsWith("access-control-") || lk === "vary" || lk === "cache-control" || lk === "etag") continue;
+            res.setHeader(k, v);
+        }
+        const body = await resp.text();
+        // 上游把 /v1/models 挂在路径 `/models` 下时返回裸数组，需要包裹成 OpenAI 标准格式。
+        let parsed: unknown;
+        try { parsed = JSON.parse(body); } catch { return void res.json({ ok: false, error: body.slice(0, 500) }); }
+        const normalized = parsed && typeof parsed === "object" && !Array.isArray(parsed) && "data" in parsed ? parsed : { data: Array.isArray(parsed) ? parsed : [] };
+        res.json({ ok: true, upstream: url.href, raw: body, ...normalized });
+    }));
     app.get("/agent/codex/skills", route(async (req, res) => {
         const workspace = ensureSiteWorkspace(config);
         const result = await listCodexSkills(emit, workspace.workspacePath, String(req.query.forceReload || "") === "1");
@@ -186,8 +228,8 @@ export function startHttpServer() {
         if (source !== "conversation" && source !== "canvas") return res.status(400).json({ ok: false, error: "Skill 草稿来源无效" });
         const clientId = String(req.body?.clientId || "");
         if (!clientId || !session.hasClient(clientId)) return res.status(409).json({ ok: false, error: "发起提炼的网页已断开，请重新连接后再试" });
-        const model = String(req.body?.model || "") || undefined;
-        const effort = reasoningEffort(req.body?.effort);
+        const model = String(req.body?.model || "") || resolveCodexDefaultModel();
+        const effort = reasoningEffort(req.body?.effort) ?? resolveCodexDefaultEffort();
         const previousCodexState = session.codexStateSnapshot;
         skillDraftRunning = true;
         try {
@@ -216,7 +258,7 @@ export function startHttpServer() {
     app.get("/agent/codex/skills/:name", route(async (req, res) => {
         res.json({ ok: true, data: await skillStore.get(routeParam(req.params.name)) });
     }));
-    app.post("/agent/codex/skills", codexMutation(async (req, res) => {
+    app.post("/agent/codex/skills", skillFileMutation(async (req, res) => {
         const data = await skillStore.create(req.body);
         session.emitAll("skills_changed", { forceReload: true });
         res.status(201).json({ ok: true, data });
@@ -230,16 +272,44 @@ export function startHttpServer() {
         session.emitAll("skills_changed", { forceReload: true });
         res.json({ ok: true, data });
     }));
-    app.post("/agent/codex/skills/:name/delete", codexMutation(async (req, res) => {
+    app.post("/agent/codex/skills/:name/delete", skillFileMutation(async (req, res) => {
         await skillStore.delete(routeParam(req.params.name), String(req.body?.expectedRevision || ""));
         session.emitAll("skills_changed", { forceReload: true });
         res.json({ ok: true });
     }));
-    app.post("/agent/codex/skills/:name", codexMutation(async (req, res) => {
+    app.post("/agent/codex/skills/:name", skillFileMutation(async (req, res) => {
         const data = await skillStore.update(routeParam(req.params.name), req.body);
         session.emitAll("skills_changed", { forceReload: true });
         res.json({ ok: true, data });
     }));
+
+    // WorkBuddy 内容同步（专家/技能/连接器「立即拉取更新」）：只增不改的独立端点，
+    // 详见 ./workbuddy-sync.ts——不动任何既有路由与 SkillStore 写纪律。
+    registerWorkbuddySync(app, {
+        workspacePath: () => ensureSiteWorkspace(config).workspacePath,
+        emitAll: (type, payload) => session.emitAll(type, payload),
+    });
+
+    // 优云智算 GPU 实例（创建/运维/接入信息）：密钥只存 Agent 侧 <workspace>/.compshare.json，
+    // 前端读不到私钥；写操作额外要求 confirm —— 详见 ./compshare-routes.ts。
+    registerCompShare(app, { workspacePath: () => ensureSiteWorkspace(config).workspacePath });
+    // 实例文件传输（SFTP）：复用同一份密钥去查实例 SSH 信息，明文口令只在请求内使用、不落盘。
+    // 社区镜像按名称/作者的精确检索（只读）：本地已加载的镜像里搜不到时的补充通道
+    registerCompShareImageSearch(app, { workspacePath: () => ensureSiteWorkspace(config).workspacePath });
+
+    // 实例可调用性探测（只读）：探 8000 端口的 OpenAI 兼容 API，决定实例能喂给画布哪类节点
+    registerCompShareProbe(app);
+    registerCompShareSftp(app, {
+        instanceInfo: async (instanceId) => {
+            const creds = compShareCredentials(() => ensureSiteWorkspace(config).workspacePath);
+            const result = await describeInstances(creds!);
+            const list = (result as { Instances?: unknown[] }).Instances || [];
+            const hit = list.find((entry) => String((entry as Record<string, unknown>).UHostId || (entry as Record<string, unknown>).InstanceId) === instanceId) as Record<string, unknown> | undefined;
+            if (!hit) throw new SftpError("NOT_FOUND", "未找到该实例（可能已释放），请刷新列表");
+            const ssh = normalizeSshInfo(hit);
+            return { ssh, encodedPassword: String(hit.Password || "") };
+        },
+    });
     app.get("/agent/codex/threads", route(async (req, res) => {
         const workspace = ensureSiteWorkspace(config);
         const result = await listCodexThreads(emit, { cwd: workspace.workspacePath, searchTerm: String(req.query.searchTerm || "") });
@@ -307,9 +377,12 @@ export function startHttpServer() {
         if (!activeThreadId || !["ready", "warning"].includes(conversation.status)) {
             return res.status(409).json({ ok: false, code: "CONVERSATION_NOT_READY", error: "Codex 对话仍在初始化，请等待 MCP 加载完成", state: conversation });
         }
-        const model = String(req.body?.model || "") || undefined;
-        const effort = reasoningEffort(req.body?.effort);
-        const skill = req.body?.skill === undefined ? undefined : await resolveCodexSkill(emit, workspace.workspacePath, skillSelector(req.body.skill), true);
+        const model = String(req.body?.model || "") || resolveCodexDefaultModel();
+        const effort = reasoningEffort(req.body?.effort) ?? resolveCodexDefaultEffort();
+        // 「仅使用免费模型」开启时，付费模型在进入上游前就拦下，避免按刊例价计费
+        const rejected = rejectNonFreeModel(model);
+        if (rejected) return res.status(400).json({ ok: false, code: "PAID_MODEL_BLOCKED", error: rejected });
+        const skill = req.body?.skill === undefined ? await resolveMentionedSkill(emit, workspace.workspacePath, prompt) : await resolveCodexSkill(emit, workspace.workspacePath, skillSelector(req.body.skill), true);
         const messageId = String(req.body?.messageId || Date.now());
         const messageText = String(req.body?.messageText || prompt || `发送了 ${attachments.length} 张图片`);
         const messageMetadata = await messageMetadataStore.recordPending(messageId, req.body?.messageMetadata);
@@ -410,6 +483,24 @@ export function startHttpServer() {
             }
         });
     }
+
+    /**
+     * 技能文件写操作（安装 / 更新 / 删除）只写 SkillStore 磁盘文件，不触碰 Codex
+     * 会话，因此不随 codexState.busy 阻塞——对话运行（含等待权限确认）时依然可以
+     * 安装技能。仅在这类操作之间互斥，避免并发写同一目录。
+     */
+    let skillFileBusy = false;
+    function skillFileMutation(handler: (req: Request, res: Response) => unknown | Promise<unknown>) {
+        return route(async (req, res) => {
+            if (skillFileBusy) return res.status(409).json({ ok: false, code: "SKILL_STORE_BUSY", error: "上一个技能写操作尚未完成，请稍后重试" });
+            skillFileBusy = true;
+            try {
+                return await handler(req, res);
+            } finally {
+                skillFileBusy = false;
+            }
+        });
+    }
     app.post("/agent/codex/approval", route(async (req, res) => {
         const decision = String(req.body?.decision || "");
         if (!["accept", "acceptForSession", "decline", "cancel"].includes(decision)) return res.status(400).json({ ok: false, error: "无效的审批决定" });
@@ -492,6 +583,24 @@ function skillSelector(value: unknown): CodexSkillSelector {
     const skillPath = typeof selector.path === "string" ? selector.path : "";
     if (!name || !skillPath) throw new CodexSkillLookupError("Skill 选择无效", 400);
     return { name, path: skillPath };
+}
+
+/**
+ * 无显式选择器时，识别提示词里的技能提法（如「请使用【hypit】技能…」「$hypit …」）并自动挂载原生 Skill。
+ * 识别失败（未登记/已停用/同名歧义/列表查询异常）一律返回 undefined 走原路径，不引入新的报错。
+ */
+async function resolveMentionedSkill(emit: (type: string, payload: unknown) => void, cwd: string, prompt: string): Promise<CodexSkillSelector | undefined> {
+    const mention = firstSkillMention(prompt);
+    if (!mention) return undefined;
+    try {
+        const { skills } = await listCodexSkills(emit, cwd, false);
+        const selector = matchSkillByName(skills, mention);
+        if (selector) logger.info("Skill mention resolved", { mention, skill: selector.name });
+        return selector;
+    } catch (error) {
+        logger.warn("Failed to resolve skill mention", { mention, error: error instanceof Error ? error.message : String(error) });
+        return undefined;
+    }
 }
 
 /** 使用当前操作系统的文件管理器定位本地文件。 */

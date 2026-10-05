@@ -3,7 +3,7 @@ import { z } from "zod";
 const recordSchema = z.record(z.unknown());
 const positionSchema = z.object({ x: z.number(), y: z.number() });
 const viewportSchema = z.object({ x: z.number(), y: z.number(), k: z.number() });
-const nodeTypeSchema = z.enum(["image", "text", "config", "video", "audio"]);
+const nodeTypeSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$/, "无效的节点类型");
 const generationModeSchema = z.enum(["text", "image", "video", "audio"]);
 
 /** Canvas Agent 对外提供的工具名称。 */
@@ -42,6 +42,7 @@ export const toolNames = [
     "prompts_search",
     "assets_list",
     "assets_add",
+    "client_mcp_setup",
 ] as const;
 export type ToolName = (typeof toolNames)[number];
 
@@ -124,16 +125,17 @@ export const toolInputSchemas = {
     prompts_search: z.object({ keyword: z.string().optional(), category: z.string().optional(), tags: z.array(z.string()).optional(), page: z.number().optional(), pageSize: z.number().optional() }),
     assets_list: z.object({ kind: z.enum(["all", "text", "image", "video"]).optional(), keyword: z.string().optional(), page: z.number().optional(), pageSize: z.number().optional() }),
     assets_add: z.object({ kind: z.enum(["text", "image"]), title: z.string(), content: z.string().optional(), imageUrl: z.string().optional(), tags: z.array(z.string()).optional(), source: z.string().optional(), note: z.string().optional() }),
+    client_mcp_setup: z.object({ action: z.enum(["status", "install"]).default("status"), clients: z.array(z.enum(["codex", "claude-desktop", "cursor", "vscode", "workbuddy", "trae"])).optional() }),
 } satisfies Record<ToolName, z.AnyZodObject>;
 
 export const toolDescriptions: Record<ToolName, string> = {
     site_navigate: "跳转网站页面。path 可为 / (首页)、/canvas (我的画布)、/canvas/:id (指定画布)、/image (生图工作台)、/video (视频创作台)、/prompts (提示词库)、/assets (我的素材)、/config (配置)。操作画布前若不在画布页，先用本工具打开画布。",
     canvas_list_projects: "列出用户全部画布（仅标题、创建/更新时间、节点数、连线数，不含完整数据），支持 keyword 搜索和 page/pageSize 分页。返回的 id 可配合 site_navigate 跳转到 /canvas/:id 打开对应画布。",
-    canvas_get_state: "读取当前网页画布的节点、连线、选区和视口。",
+    canvas_get_state: "读取当前网页画布的节点、连线、选区和视口。返回的 nodeTypes 是当前画布可创建的节点类型清单（含插件注册的类型），创建节点时只能使用清单中列出的 type。",
     canvas_get_selection: "读取当前网页画布选中的节点。",
     canvas_export_snapshot: "导出当前画布快照，用于理解布局。",
-    canvas_apply_ops: "批量操作当前网页画布。ops 支持 add_node、update_node、delete_node、delete_connections、connect_nodes、set_viewport、select_nodes、run_generation。",
-    canvas_create_node: "创建任意类型节点：text、image、config、video、audio。适合创建占位图、媒体占位、配置节点或自定义 metadata 节点。",
+    canvas_apply_ops: "批量操作当前网页画布。ops 支持 add_node、update_node、delete_node、delete_connections、connect_nodes、set_viewport、select_nodes、run_generation。add_node 的 nodeType 支持内置类型和 canvas_get_state 返回 nodeTypes 清单中的插件类型。搭建多节点工作流时优先用本工具一次完成建点与连线。",
+    canvas_create_node: "创建任意类型节点：内置类型 text、image、config、video、audio，也可使用 canvas_get_state 返回的 nodeTypes 清单中插件注册的类型（如 openreel-video:editor 视频编辑器）。未注册的类型会被前端降级为文本节点，因此只使用清单中列出的类型。适合创建占位图、媒体占位、配置节点、插件节点或自定义 metadata 节点。",
     canvas_create_attachment_nodes: "把当前对话中用户上传的图片附件创建成真实画布图片节点。attachmentIds 使用本轮附件清单中的 ID；返回的节点 ID 可传给 canvas_create_generation_flow.referenceNodeIds 作为生成参考图。",
     canvas_create_text_node: "在当前画布创建单个文本节点。",
     canvas_create_text_nodes: "批量创建文本节点，适合生成标题、段落、脚本、说明等内容块。",
@@ -161,4 +163,5 @@ export const toolDescriptions: Record<ToolName, string> = {
     prompts_search: "搜索提示词库（第三方提示词合集），支持 keyword、category、tags 过滤和 page/pageSize 分页，返回标题、提示词、分类、标签、封面等。",
     assets_list: "列出用户「我的素材」，支持 kind（text/image/video）过滤、keyword 搜索和 page/pageSize 分页。为控制体积不返回图片/视频原始 data，仅返回封面与元信息。",
     assets_add: "向「我的素材」新增素材。kind=text 时用 content 传文本内容；kind=image 时用 imageUrl 传图片地址或 dataURL。可附带 title、tags、source、note。",
+    client_mcp_setup: "把本机 Agent 一键注册成各 MCP 工具的配置。action=status 检测本机已安装的客户端（Codex/Claude Desktop/Cursor/VS Code/WorkBuddy/Trae）及各自配置状态；action=install 写入配置（写入前自动备份，Codex 走 config.toml TOML、VS Code 用 servers 键、Windows 自动用 cmd /c npx 包装）。可用 clients 指定只处理哪些客户端，默认全部。本工具不需要画布页面连接。",
 };

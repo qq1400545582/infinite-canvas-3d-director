@@ -51,7 +51,7 @@ export function AgentChatComposer({
     model?: string;
     reasoningEffort?: AgentReasoningEffort | "";
     onModelChange?: (model: string) => void;
-    onReasoningEffortChange?: (effort: AgentReasoningEffort) => void;
+    onReasoningEffortChange?: (effort: AgentReasoningEffort | "") => void;
     left?: ReactNode;
 }) {
     const { t } = useTranslation();
@@ -91,7 +91,7 @@ export function AgentChatComposer({
                         ) : null}
                         {onConfirmToolsChange ? <ToolConfirmationMenu confirmTools={Boolean(confirmTools)} theme={theme} onChange={onConfirmToolsChange} /> : null}
                         {permissionMode && onPermissionModeChange ? <PermissionModeMenu permissionMode={permissionMode} theme={theme} onChange={onPermissionModeChange} /> : null}
-                        {models?.length && model && reasoningEffort && onModelChange && onReasoningEffortChange ? <AgentModelControls models={models} model={model} reasoningEffort={reasoningEffort} onModelChange={onModelChange} onReasoningEffortChange={onReasoningEffortChange} /> : null}
+                        {models?.length && onModelChange && onReasoningEffortChange ? <AgentModelControls models={models} model={model || ""} reasoningEffort={reasoningEffort || ""} onModelChange={onModelChange} onReasoningEffortChange={onReasoningEffortChange} /> : null}
                         {left}
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
@@ -107,23 +107,39 @@ export function AgentChatComposer({
     );
 }
 
-function AgentModelControls({ models, model, reasoningEffort, onModelChange, onReasoningEffortChange }: { models: AgentModel[]; model: string; reasoningEffort: AgentReasoningEffort; onModelChange: (model: string) => void; onReasoningEffortChange: (effort: AgentReasoningEffort) => void }) {
+/** Radix Select 不允许 SelectItem 的 value 是空字符串，用哨兵值表示「自动」。 */
+const MODEL_AUTO_VALUE = "__codex_config_auto__";
+
+/**
+ * 模型 / 思考程度控件。
+ *
+ * 空值代表「自动」：什么都不向 Codex 上报，由本机 `~/.codex/config.toml` 决定（渠道面板「同步到
+ * Codex」写入的供应商模型即走这条路）。因为 `turn/start` 一旦带上 model 就会被该线程永久记住，
+ * 默认项必须是「自动」——否则会把用户配置好的渠道模型覆盖成 Codex 内置目录里的模型，第三方供应商
+ * 随即返回「无可用渠道」。
+ */
+function AgentModelControls({ models, model, reasoningEffort, onModelChange, onReasoningEffortChange }: { models: AgentModel[]; model: string; reasoningEffort: AgentReasoningEffort | ""; onModelChange: (model: string) => void; onReasoningEffortChange: (effort: AgentReasoningEffort | "") => void }) {
     const { t } = useTranslation();
-    const current = models.find((item) => item.model === model) || models[0];
-    const effortLabel = (effort: AgentReasoningEffort) => t(`agent.composer.effort.${effort}`);
+    // 「自动」= 没有命中任何目录模型。
+    const autoModel = !models.some((item) => item.model === model);
+    // 目录项只用来给出可选的思考程度清单，未选模型时用目录默认项兜底。
+    const current = models.find((item) => item.model === model) || models.find((item) => item.isDefault) || models[0];
+    const modelLabel = autoModel ? t("agent.composer.modelAuto") : current.displayName || current.model;
+    const effortLabel = (effort: AgentReasoningEffort | "") => effort ? t(`agent.composer.effort.${effort}`) : t("agent.composer.effortAuto");
     const [modelOpen, setModelOpen] = useState(false);
     const [reasoningOpen, setReasoningOpen] = useState(false);
     return (
         <div className="flex min-w-0 items-center gap-1">
-            <Tooltip title={t("agent.composer.model", { model: current.displayName || current.model })} placement="top" open={modelOpen ? false : undefined}>
+            <Tooltip title={t("agent.composer.model", { model: modelLabel })} placement="top" open={modelOpen ? false : undefined}>
                 <span className="inline-flex shrink-0">
-                    <Select value={model} open={modelOpen} onOpenChange={setModelOpen} onValueChange={onModelChange}>
-                        <SelectTrigger hideChevron className="h-9 w-9 min-w-9 justify-center gap-0 rounded-full border-0 bg-transparent px-0 text-xs font-medium shadow-none hover:bg-black/5 focus:ring-0 @min-[660px]:w-auto @min-[660px]:min-w-36 @min-[660px]:max-w-36 @min-[660px]:justify-start @min-[660px]:gap-1.5 @min-[660px]:px-2.5 dark:bg-transparent dark:hover:bg-white/10" aria-label={t("agent.composer.selectModel", { model: current.displayName || current.model })}>
+                    <Select value={autoModel ? MODEL_AUTO_VALUE : model} open={modelOpen} onOpenChange={setModelOpen} onValueChange={(value) => onModelChange(value === MODEL_AUTO_VALUE ? "" : value)}>
+                        <SelectTrigger hideChevron className="h-9 w-9 min-w-9 justify-center gap-0 rounded-full border-0 bg-transparent px-0 text-xs font-medium shadow-none hover:bg-black/5 focus:ring-0 @min-[660px]:w-auto @min-[660px]:min-w-36 @min-[660px]:max-w-36 @min-[660px]:justify-start @min-[660px]:gap-1.5 @min-[660px]:px-2.5 dark:bg-transparent dark:hover:bg-white/10" aria-label={t("agent.composer.selectModel", { model: modelLabel })}>
                             <Cpu className="size-3.5 shrink-0 opacity-70" />
-                            <span className="hidden min-w-0 flex-1 truncate text-left @min-[660px]:inline">{current.displayName || current.model}</span>
+                            <span className="hidden min-w-0 flex-1 truncate text-left @min-[660px]:inline">{modelLabel}</span>
                             <ChevronUp className="hidden size-3 opacity-50 @min-[660px]:block" />
                         </SelectTrigger>
                         <SelectContent data-canvas-no-zoom position="popper" side="top" align="start" sideOffset={6} className="z-[1200] w-64 rounded-xl border border-border/70 bg-popover p-1 shadow-xl">
+                            <SelectItem value={MODEL_AUTO_VALUE}>{t("agent.composer.modelAuto")}</SelectItem>
                             {models.map((item) => <SelectItem key={item.model} value={item.model}>{item.displayName || item.model}</SelectItem>)}
                         </SelectContent>
                     </Select>
@@ -131,13 +147,14 @@ function AgentModelControls({ models, model, reasoningEffort, onModelChange, onR
             </Tooltip>
             <Tooltip title={t("agent.composer.reasoning", { effort: effortLabel(reasoningEffort) })} placement="top" open={reasoningOpen ? false : undefined}>
                 <span className="inline-flex shrink-0">
-                    <Select value={reasoningEffort} open={reasoningOpen} onOpenChange={setReasoningOpen} onValueChange={(value) => onReasoningEffortChange(value as AgentReasoningEffort)}>
+                    <Select value={reasoningEffort || MODEL_AUTO_VALUE} open={reasoningOpen} onOpenChange={setReasoningOpen} onValueChange={(value) => onReasoningEffortChange(value === MODEL_AUTO_VALUE ? "" : value as AgentReasoningEffort)}>
                         <SelectTrigger hideChevron className="h-9 w-9 min-w-9 justify-center gap-0 rounded-full border-0 bg-transparent px-0 text-xs font-medium shadow-none hover:bg-black/5 focus:ring-0 @min-[660px]:w-auto @min-[660px]:min-w-[4.5rem] @min-[660px]:justify-start @min-[660px]:gap-1.5 @min-[660px]:px-2.5 dark:bg-transparent dark:hover:bg-white/10" aria-label={t("agent.composer.selectReasoning", { effort: effortLabel(reasoningEffort) })}>
                             <Gauge className="size-3.5 opacity-70" />
                             <span className="hidden @min-[660px]:inline">{effortLabel(reasoningEffort)}</span>
                             <ChevronUp className="hidden size-3 opacity-50 @min-[660px]:block" />
                         </SelectTrigger>
                         <SelectContent data-canvas-no-zoom position="popper" side="top" align="start" sideOffset={6} className="z-[1200] min-w-32 rounded-xl border border-border/70 bg-popover p-1 shadow-xl">
+                            <SelectItem value={MODEL_AUTO_VALUE}>{t("agent.composer.effortAuto")}</SelectItem>
                             {current.supportedReasoningEfforts.map((item) => <SelectItem key={item.reasoningEffort} value={item.reasoningEffort}>{effortLabel(item.reasoningEffort)}</SelectItem>)}
                         </SelectContent>
                     </Select>

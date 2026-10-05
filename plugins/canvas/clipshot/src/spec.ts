@@ -18,7 +18,8 @@ export type GridSpec = { cols: number; rows: number; count: number };
 // 单次最多出图格数（同时限制网格规模，避免一次请求爆掉模型的网格理解能力）
 export const MAX_PANELS = 16;
 export const MIN_GRID_SIDE = 1;
-export const MAX_GRID_SIDE = 4;
+// 行列可完全自定义（1–8）；但 列×行 仍受 MAX_PANELS 约束，超出时由工作台拦截并提示
+export const MAX_GRID_SIDE = 8;
 
 export const DEFAULT_GRID: GridSpec = { cols: 3, rows: 3, count: 9 };
 

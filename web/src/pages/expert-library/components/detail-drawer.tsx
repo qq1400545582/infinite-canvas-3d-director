@@ -1,5 +1,5 @@
-import { Check, Copy, Zap } from "lucide-react";
-import { Button, Drawer, Tag } from "antd";
+import { Check, Copy, Trash2, Zap } from "lucide-react";
+import { Button, Drawer, Popconfirm, Tag } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { resolveIcon } from "./icon-map";
@@ -19,11 +19,13 @@ export function DetailDrawer({
     open,
     onClose,
     onInvoke,
+    onRemove,
 }: {
     item: LibraryItem | null;
     open: boolean;
     onClose: () => void;
     onInvoke: (item: LibraryItem) => void;
+    onRemove?: (item: LibraryItem) => void;
 }) {
     const { t } = useTranslation();
     const copyText = useCopyText();
@@ -133,6 +135,23 @@ export function DetailDrawer({
                         ) : (
                             <p className="mt-2 text-center text-xs text-amber-600 dark:text-amber-400">{t("expertLibrary.drawerPrereq")}</p>
                         )}
+                        {onRemove ? (
+                            <Popconfirm
+                                title={t("expertLibrary.remove.confirmTitle", { name: item.name })}
+                                description={t("expertLibrary.remove.confirmDesc")}
+                                okText={t("expertLibrary.remove.ok")}
+                                cancelText={t("common.cancel")}
+                                okButtonProps={{ danger: true }}
+                                onConfirm={() => {
+                                    onRemove(item);
+                                    onClose();
+                                }}
+                            >
+                                <Button type="text" danger block icon={<Trash2 className="size-4" />} className="mt-2">
+                                    {t("expertLibrary.remove.action", { name: item.name })}
+                                </Button>
+                            </Popconfirm>
+                        ) : null}
                     </div>
                 </div>
             ) : null}

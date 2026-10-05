@@ -5,6 +5,7 @@ import { Button, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { useCanvasEnvironment } from "@/lib/canvas-environment";
 import { useThemeStore } from "@/stores/use-theme-store";
 
 type CanvasZoomControlsProps = {
@@ -18,13 +19,16 @@ type CanvasZoomControlsProps = {
 export function CanvasZoomControls({ scale, onScaleChange, onReset, isMiniMapOpen, onToggleMiniMap }: CanvasZoomControlsProps) {
     const [shortcutsOpen, setShortcutsOpen] = useState(false);
     const { t } = useTranslation();
+    const { compact } = useCanvasEnvironment();
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const dockStyle = { background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item, boxShadow: colorTheme === "dark" ? "0 18px 45px rgba(0,0,0,.32)" : "0 16px 40px rgba(28,25,23,.12)" };
     const activeStyle = { background: theme.toolbar.activeBg, color: theme.toolbar.activeText };
 
     return (
-        <div className="absolute bottom-5 left-5 z-50" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+        // 桌面：坐在工具栏让出来的左侧空位里（工具栏 left:300）。
+        // 紧凑屏：工具栏占满宽度，缩放控件抬到坞上方，避免两者叠在一块儿按不到。
+        <div className={`pointer-events-auto absolute z-50 ${compact ? "bottom-[84px] left-3" : "bottom-5 left-5"}`} onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
             <div className="flex h-14 items-center gap-1 rounded-xl border px-2 shadow-lg backdrop-blur" style={dockStyle}>
                 <Tooltip title={isMiniMapOpen ? t("canvas.miniMapClose") : t("canvas.miniMapOpen")}>
                     <Button

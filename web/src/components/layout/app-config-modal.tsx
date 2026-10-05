@@ -6,7 +6,9 @@ import { useTranslation } from "react-i18next";
 
 import { ModelPicker } from "@/components/model-picker";
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
+import { CompsharePanel } from "@/components/layout/compshare-panel";
 import { ConfigLocalProxy } from "@/components/layout/config-local-proxy";
+import { ConfigSshTunnel } from "@/components/layout/config-ssh-tunnel";
 import { ConfigPromptSources } from "@/components/layout/config-prompt-sources";
 import { ConfigLocalStorage } from "@/components/layout/config-local-storage";
 import type { AppLocale } from "@/i18n";
@@ -215,7 +217,14 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                     {
                         key: "local-proxy",
                         label: t("config.tabs.localProxy"),
-                        children: <ConfigLocalProxy />,
+                        children: (
+                            <div className="flex flex-col gap-4">
+                                <ConfigLocalProxy />
+                                <ConfigSshTunnel />
+                                {/* 优云智算 GPU 实例：同属「本机/外部服务接入」，故并入本地代理 Tab，不新增顶层 Tab */}
+                                <CompsharePanel />
+                            </div>
+                        ),
                     },
                     {
                         key: "preferences",

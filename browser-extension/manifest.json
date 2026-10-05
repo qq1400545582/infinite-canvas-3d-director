@@ -1,0 +1,20 @@
+{
+    "manifest_version": 3,
+    "name": "发送到无限画布",
+    "version": "1.3.0",
+    "description": "把网页上的图片、视频，以及本机图片 / 视频一键发送到本机无限画布，作为画布节点。图片与视频都会尽量转存内嵌，避免外链被防盗链拒绝。支持悬停按钮、右键菜单、弹窗选择文件、Alt+拖拽、Alt+V 粘贴。",
+    "permissions": ["contextMenus", "storage", "activeTab", "scripting"],
+    "host_permissions": ["<all_urls>"],
+    "background": { "service_worker": "background.js" },
+    "action": { "default_title": "发送到无限画布", "default_popup": "popup.html" },
+    "options_ui": { "page": "options.html", "open_in_tab": true },
+    "content_scripts": [
+        {
+            "matches": ["http://*/*", "https://*/*"],
+            "js": ["media.js", "content.js"],
+            "css": ["content.css"],
+            "run_at": "document_idle",
+            "all_frames": false
+        }
+    ]
+}

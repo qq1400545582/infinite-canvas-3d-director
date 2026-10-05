@@ -15,6 +15,7 @@ import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { CANVAS_DEFAULT_BACKGROUND_OPACITY, CANVAS_DEFAULT_FONT_OPACITY, CANVAS_DEFAULT_NODE_OPACITY, canvasThemes, type CanvasBackgroundMedia, type CanvasBackgroundMode } from "@/lib/canvas-theme";
+import { isCoarsePointer, isTouchPointerEvent, useCanvasEnvironment } from "@/lib/canvas-environment";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
@@ -74,7 +75,7 @@ import { registerBuiltinNodes } from "@/components/canvas/nodes/builtin-nodes";
 import { CanvasPluginManagerModal } from "@/components/canvas/canvas-plugin-manager-modal";
 import { CanvasRefreshShell } from "@/components/canvas/canvas-refresh-shell";
 import { CanvasTopBar } from "@/components/canvas/canvas-top-bar";
-import { ConnectionCreateMenu, NodeCreateMenu, type PendingConnectionCreate } from "@/components/canvas/canvas-create-menus";
+import { BaguaNodeCreateMenu, ConnectionCreateMenu, NodeCreateMenu, resolvePrimaryNodeSlots, type PendingConnectionCreate } from "@/components/canvas/canvas-create-menus";
 import {
     CanvasNodeType,
     type CanvasAssistantImage,
@@ -129,6 +130,10 @@ const VIDEO_NODE_MAX_WIDTH = 420;
 const VIDEO_NODE_MAX_HEIGHT = 420;
 // Stable empty reference array prevents `... || []` from invalidating CanvasNode's React.memo on every render.
 const EMPTY_REFERENCES: CanvasResourceReference[] = [];
+/** 兜底用的空数组必须是**同一个引用**：`|| []` 每次渲染都会造出新数组，
+ *  传给依赖它做 memo/effect 的子组件会导致「渲染即重算」的抖动。 */
+const EMPTY_NODE_ARRAY: CanvasNodeData[] = [];
+const EMPTY_INPUT_ARRAY: NodeGenerationInput[] = [];
 const CONNECTION_HANDLE_HIT_RADIUS = 40;
 const CONNECTION_NODE_HIT_PADDING = 32;
 const NODE_STATUS_IDLE = "idle" as const;
@@ -145,6 +150,12 @@ function applyGeneratedVideo(item: CanvasNodeData, video: UploadedFile, extra: C
         position: { x: item.position.x + item.width / 2 - videoSize.width / 2, y: item.position.y + item.height / 2 - videoSize.height / 2 },
         metadata: { ...item.metadata, ...videoMetadata(video), ...extra },
     };
+}
+
+/** 画布外观透明度防御归一：旧工程数据可能存入 NaN/越界/非数字，滑杆收到坏值会引发 React #185 崩页。 */
+function sanitizeOpacity(value: unknown, fallback: number) {
+    const num = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(num) ? Math.min(Math.max(num, 0), 1) : fallback;
 }
 
 export default function CanvasPage() {
@@ -205,6 +216,10 @@ function InfiniteCanvasPage() {
         movedIds: new Set(),
     });
 
+    // 本次手势由谁发起：true = 手指/触控笔（走 pointer 通道），false = 鼠标（走 mouse 通道）。
+    // 两条通道互斥，保证「同一帧只算一次」以及桌面端行为与改造前完全一致。
+    const touchOwnedRef = useRef(false);
+
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
@@ -236,8 +251,35 @@ function InfiniteCanvasPage() {
     const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [nodeCreatePosition, setNodeCreatePosition] = useState<Position | null>(null);
+    // 双击 = 太极图主节点选择器；双击右键 = 其它节点/插件列表。
+    const [nodeCreateMode, setNodeCreateMode] = useState<"primary" | "secondary">("primary");
+    const primaryCreateTypes = useMemo(() => new Set(resolvePrimaryNodeSlots().filter((slot) => slot.available && slot.type).map((slot) => slot.type)), [nodeRegistryVersion]);
     const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
+    // 底部工具坞（缩放控件 + 工具栏）自动收纳：打开画布默认隐藏，鼠标进入底部热区（或点击）唤起，移出片刻后自动收起。
+    // 触屏上没有 hover：默认常驻展开，否则手指用户永远唤不出工具栏。
+    const { coarse: isCoarsePointerEnv } = useCanvasEnvironment();
+    const [bottomDockAwake, setBottomDockAwake] = useState(() => isCoarsePointer());
+    const bottomDockHideTimer = useRef<number | null>(null);
+    const wakeBottomDock = useCallback(() => {
+        if (bottomDockHideTimer.current !== null) {
+            window.clearTimeout(bottomDockHideTimer.current);
+            bottomDockHideTimer.current = null;
+        }
+        setBottomDockAwake(true);
+    }, []);
+    const scheduleBottomDockHide = useCallback(() => {
+        // 触屏设备保留常驻：没有 hover 就让人家长久看不见工具栏没有道理。
+        if (isCoarsePointerEnv) return;
+        if (bottomDockHideTimer.current !== null) window.clearTimeout(bottomDockHideTimer.current);
+        bottomDockHideTimer.current = window.setTimeout(() => {
+            bottomDockHideTimer.current = null;
+            setBottomDockAwake(false);
+        }, 800);
+    }, [isCoarsePointerEnv]);
+    useEffect(() => () => {
+        if (bottomDockHideTimer.current !== null) window.clearTimeout(bottomDockHideTimer.current);
+    }, []);
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
     const [showImageInfo, setShowImageInfo] = useState(false);
     const [backgroundMedia, setBackgroundMedia] = useState<CanvasBackgroundMedia | null>(null);
@@ -458,9 +500,9 @@ function InfiniteCanvasPage() {
             setBackgroundMode(project.backgroundMode);
             setShowImageInfo(project.showImageInfo || false);
             setBackgroundMedia(project.backgroundMedia || null);
-            setBackgroundOpacity(project.backgroundOpacity ?? CANVAS_DEFAULT_BACKGROUND_OPACITY);
-            setFontOpacity(project.fontOpacity ?? CANVAS_DEFAULT_FONT_OPACITY);
-            setNodeOpacity(project.nodeOpacity ?? CANVAS_DEFAULT_NODE_OPACITY);
+            setBackgroundOpacity(sanitizeOpacity(project.backgroundOpacity, CANVAS_DEFAULT_BACKGROUND_OPACITY));
+            setFontOpacity(sanitizeOpacity(project.fontOpacity, CANVAS_DEFAULT_FONT_OPACITY));
+            setNodeOpacity(sanitizeOpacity(project.nodeOpacity, CANVAS_DEFAULT_NODE_OPACITY));
             setViewport(project.viewport);
             historyRef.current = { past: [], future: [] };
             if (historyCommitTimerRef.current) {
@@ -475,9 +517,9 @@ function InfiniteCanvasPage() {
                 backgroundMode: project.backgroundMode,
                 showImageInfo: project.showImageInfo || false,
                 backgroundMedia: project.backgroundMedia || null,
-                backgroundOpacity: project.backgroundOpacity ?? CANVAS_DEFAULT_BACKGROUND_OPACITY,
-                fontOpacity: project.fontOpacity ?? CANVAS_DEFAULT_FONT_OPACITY,
-                nodeOpacity: project.nodeOpacity ?? CANVAS_DEFAULT_NODE_OPACITY,
+                backgroundOpacity: sanitizeOpacity(project.backgroundOpacity, CANVAS_DEFAULT_BACKGROUND_OPACITY),
+                fontOpacity: sanitizeOpacity(project.fontOpacity, CANVAS_DEFAULT_FONT_OPACITY),
+                nodeOpacity: sanitizeOpacity(project.nodeOpacity, CANVAS_DEFAULT_NODE_OPACITY),
             };
             setHistoryState({ canUndo: false, canRedo: false });
             setProjectLoaded(true);
@@ -1348,6 +1390,8 @@ function InfiniteCanvasPage() {
             initialSelectedNodes,
             movedIds: new Set(initialSelectedNodes.keys()),
         };
+        // 手指发起的拖拽：后续挪用 pointermove/pointerup 推进（见 touchOwnedRef）；鼠标发起则完全照旧。
+        touchOwnedRef.current = isTouchPointerEvent(event as unknown as { pointerType?: string });
         historyPausedRef.current = true;
         nodeDraggingRef.current = true;
         setIsNodeDragging(true);
@@ -1405,16 +1449,20 @@ function InfiniteCanvasPage() {
         }
     }, []);
 
-    const handleGlobalMouseMove = useCallback(
-        (event: MouseEvent) => {
+    /**
+     * 「拖拽中」的每帧计算：节点位移 + 连线落点判定。
+     * 鼠标与手指共用这一段，差别只在事件通道不同（见下方两个 wrapper）。
+     */
+    const updateInteraction = useCallback(
+        (clientX: number, clientY: number) => {
             const currentViewport = viewportRef.current;
 
             if (dragRef.current.isDraggingNode) {
-                const dx = (event.clientX - dragRef.current.startX) / currentViewport.k;
-                const dy = (event.clientY - dragRef.current.startY) / currentViewport.k;
+                const dx = (clientX - dragRef.current.startX) / currentViewport.k;
+                const dy = (clientY - dragRef.current.startY) / currentViewport.k;
                 const initialPositions = dragRef.current.initialSelectedNodes;
                 const movedIds = dragRef.current.movedIds;
-                if (Math.abs(event.clientX - dragRef.current.startX) > 3 || Math.abs(event.clientY - dragRef.current.startY) > 3) {
+                if (Math.abs(clientX - dragRef.current.startX) > 3 || Math.abs(clientY - dragRef.current.startY) > 3) {
                     dragRef.current.hasMoved = true;
                 }
 
@@ -1438,17 +1486,70 @@ function InfiniteCanvasPage() {
             }
 
             if (connectingParamsRef.current && !pendingConnectionCreateRef.current) {
-                const dropTarget = getConnectionDropTarget(event.clientX, event.clientY, connectingParamsRef.current);
+                const dropTarget = getConnectionDropTarget(clientX, clientY, connectingParamsRef.current);
                 connectionTargetNodeIdRef.current = dropTarget.nodeId;
                 setConnectionTargetNodeId(dropTarget.nodeId);
-                setMouseWorld(screenToCanvas(event.clientX, event.clientY));
+                setMouseWorld(screenToCanvas(clientX, clientY));
             }
         },
-        [finishNodeDrag, getConnectionDropTarget, screenToCanvas],
+        [getConnectionDropTarget, screenToCanvas],
+    );
+
+    /**
+     * 手势收尾：结束拖拽 + 清掉拉框 + 连线结算（命中成连线 / 落在空白召唤创建菜单）。
+     * 鼠标由 mouseup 触发，手指由 pointerup 触发，同一手势只会走其中一条（靠 touchOwnedRef 互斥）。
+     */
+    const finishInteraction = useCallback(
+        (clientX: number, clientY: number) => {
+            finishNodeDrag(clientX, clientY);
+
+            selectionBoxRef.current = null;
+            setSelectionBox(null);
+
+            if (pendingConnectionCreateRef.current) return;
+
+            const currentConnection = connectingParamsRef.current;
+            if (currentConnection) {
+                const dropTarget = getConnectionDropTarget(clientX, clientY, currentConnection);
+                if (dropTarget.nodeId) {
+                    connectNodes(currentConnection, dropTarget.nodeId);
+                    setConnecting(null);
+                } else if (dropTarget.isNearNode) {
+                    setConnecting(null);
+                } else {
+                    setMouseWorld(screenToCanvas(clientX, clientY));
+                    setPendingConnectionCreate({ connection: currentConnection, position: screenToCanvas(clientX, clientY) });
+                }
+            }
+        },
+        [connectNodes, finishNodeDrag, getConnectionDropTarget, screenToCanvas, setConnecting],
+    );
+
+    // 鼠标通道：本次手势若由手指发起，浏览器补发的 mouse 事件一律忽略，避免同一帧算两次。
+    const handleGlobalMouseMove = useCallback(
+        (event: MouseEvent) => {
+            if (touchOwnedRef.current) return;
+            updateInteraction(event.clientX, event.clientY);
+        },
+        [updateInteraction],
+    );
+
+    const handleGlobalMouseUp = useCallback(
+        (event: MouseEvent) => {
+            if (touchOwnedRef.current) return;
+            finishInteraction(event.clientX, event.clientY);
+        },
+        [finishInteraction],
     );
 
     const handleGlobalPointerMove = useCallback(
         (event: PointerEvent) => {
+            // 手指通道：走与鼠标完全一致的每帧计算，只是入口不同（pointermove）。
+            if (touchOwnedRef.current) {
+                updateInteraction(event.clientX, event.clientY);
+                return;
+            }
+
             const currentSelection = selectionBoxRef.current;
             if (!currentSelection) return;
 
@@ -1477,38 +1578,37 @@ function InfiniteCanvasPage() {
             setSelectionBox(nextSelectionBox);
             setSelectedNodeIds(nextSelected);
         },
-        [screenToCanvas],
-    );
-
-    const handleGlobalMouseUp = useCallback(
-        (event: MouseEvent) => {
-            finishNodeDrag(event.clientX, event.clientY);
-
-            selectionBoxRef.current = null;
-            setSelectionBox(null);
-
-            if (pendingConnectionCreateRef.current) return;
-
-            const currentConnection = connectingParamsRef.current;
-            if (currentConnection) {
-                const dropTarget = getConnectionDropTarget(event.clientX, event.clientY, currentConnection);
-                if (dropTarget.nodeId) {
-                    connectNodes(currentConnection, dropTarget.nodeId);
-                    setConnecting(null);
-                } else if (dropTarget.isNearNode) {
-                    setConnecting(null);
-                } else {
-                    setMouseWorld(screenToCanvas(event.clientX, event.clientY));
-                    setPendingConnectionCreate({ connection: currentConnection, position: screenToCanvas(event.clientX, event.clientY) });
-                }
-            }
-        },
-        [connectNodes, finishNodeDrag, getConnectionDropTarget, screenToCanvas, setConnecting],
+        [screenToCanvas, updateInteraction],
     );
 
     useEffect(() => {
-        const handlePointerUp = (event: PointerEvent) => finishNodeDrag(event.clientX, event.clientY);
-        const cancelNodeDrag = () => finishNodeDrag();
+        // 手指登记表：用来识别「第几根手指」，第二根落下时把当前拖拽让位给捏合缩放。
+        const activeTouchPointers = new Set<number>();
+        const handleMultiTouchGuard = (event: PointerEvent) => {
+            if (!isTouchPointerEvent(event)) return;
+            activeTouchPointers.add(event.pointerId);
+            if (activeTouchPointers.size >= 2 && touchOwnedRef.current) {
+                // 双指 = 缩放/平移意图；此时若还挂着一个节点拖拽，节点会随着捏合一起移动，必须就地取消。
+                finishNodeDrag();
+                touchOwnedRef.current = false;
+            }
+        };
+        const handlePointerUp = (event: PointerEvent) => {
+            activeTouchPointers.delete(event.pointerId);
+            if (!touchOwnedRef.current) {
+                // 桌面端保持原样：pointerup 只负责收掉拖拽，结算仍由 mouseup 完成。
+                finishNodeDrag(event.clientX, event.clientY);
+                return;
+            }
+            finishInteraction(event.clientX, event.clientY);
+            touchOwnedRef.current = false;
+        };
+        const cancelNodeDrag = () => {
+            activeTouchPointers.clear();
+            touchOwnedRef.current = false;
+            finishNodeDrag();
+        };
+        window.addEventListener("pointerdown", handleMultiTouchGuard);
         window.addEventListener("mousemove", handleGlobalMouseMove);
         window.addEventListener("mouseup", handleGlobalMouseUp);
         window.addEventListener("pointerup", handlePointerUp);
@@ -1523,7 +1623,7 @@ function InfiniteCanvasPage() {
             window.removeEventListener("blur", cancelNodeDrag);
             window.removeEventListener("pointermove", handleGlobalPointerMove);
         };
-    }, [finishNodeDrag, handleGlobalMouseMove, handleGlobalMouseUp, handleGlobalPointerMove]);
+    }, [finishInteraction, finishNodeDrag, handleGlobalMouseMove, handleGlobalMouseUp, handleGlobalPointerMove]);
 
     const createImageFileNode = useCallback(async (file: File, position: Position) => {
         const image = await uploadImage(file);
@@ -1721,6 +1821,8 @@ function InfiniteCanvasPage() {
             connectionTargetNodeIdRef.current = null;
             setConnectionTargetNodeId(null);
             setSelectedConnectionId(null);
+            // 连线同样按发起 pointer 的类别切换事件通道（手指没有连续的 mousemove）。
+            touchOwnedRef.current = isTouchPointerEvent(event as unknown as { pointerType?: string });
         },
         [screenToCanvas, setConnecting],
     );
@@ -1841,7 +1943,18 @@ function InfiniteCanvasPage() {
     }, []);
 
     const handleConfigNodeChange = useCallback((nodeId: string, patch: Partial<CanvasNodeData["metadata"]>) => {
-        setNodes((prev) => prev.map((node) => (node.id === nodeId ? applyNodeConfigPatch(node, patch) : node)));
+        setNodes((prev) => {
+            let changed = false;
+            const next = prev.map((node) => {
+                if (node.id !== nodeId) return node;
+                const patched = applyNodeConfigPatch(node, patch);
+                if (patched === node) return node;
+                changed = true;
+                return patched;
+            });
+            // 没有任何节点真的变了就原样返回，避免无谓的重渲染（会连带重算依赖 nodes 的所有 memo）
+            return changed ? next : prev;
+        });
     }, []);
 
     const downloadNodeImage = useCallback((node: CanvasNodeData) => {
@@ -2363,11 +2476,25 @@ function InfiniteCanvasPage() {
         setTitleEditing(false);
     }, [projectId, renameProject, titleDraft]);
 
-    const preventCanvasContextMenu = useCallback((event: ReactMouseEvent) => {
-        if ((event.target as HTMLElement).closest("[data-node-id]")) return;
-        event.preventDefault();
-        setContextMenu(null);
-    }, []);
+    const lastCanvasRightClickRef = useRef<{ time: number; x: number; y: number } | null>(null);
+    const preventCanvasContextMenu = useCallback(
+        (event: ReactMouseEvent) => {
+            if ((event.target as HTMLElement).closest("[data-node-id]")) return;
+            event.preventDefault();
+            setContextMenu(null);
+            // 双击右键（连续两次、位置接近）在画布空白处呼出「其它节点/插件」选择列表。
+            const now = Date.now();
+            const last = lastCanvasRightClickRef.current;
+            if (last && now - last.time < 450 && Math.hypot(event.clientX - last.x, event.clientY - last.y) < 20) {
+                lastCanvasRightClickRef.current = null;
+                setNodeCreateMode("secondary");
+                setNodeCreatePosition(screenToCanvas(event.clientX, event.clientY));
+                return;
+            }
+            lastCanvasRightClickRef.current = { time: now, x: event.clientX, y: event.clientY };
+        },
+        [screenToCanvas],
+    );
 
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
@@ -3123,8 +3250,8 @@ function InfiniteCanvasPage() {
                     nodeId={panelNode.id}
                     nodes={nodes}
                     value={panelNode.metadata?.composerContent ?? panelNode.metadata?.prompt ?? ""}
-                    inputs={configInputsById.get(panelNode.id) || []}
-                    connectedNodes={connectedNodesByNodeId.get(panelNode.id) || []}
+                    inputs={configInputsById.get(panelNode.id) || EMPTY_INPUT_ARRAY}
+                    connectedNodes={connectedNodesByNodeId.get(panelNode.id) || EMPTY_NODE_ARRAY}
                     onChange={(composerContent) => handleConfigNodeChange(panelNode.id, { composerContent })}
                     onClose={() => setDialogNodeId(null)}
                     onDisconnectReference={disconnectNodeReference}
@@ -3136,7 +3263,7 @@ function InfiniteCanvasPage() {
                     nodes={nodes}
                     isRunning={runningNodeId === panelNode.id}
                     mentionReferences={mentionReferencesByNodeId.get(panelNode.id) || EMPTY_REFERENCES}
-                    connectedNodes={connectedNodesByNodeId.get(panelNode.id) || []}
+                    connectedNodes={connectedNodesByNodeId.get(panelNode.id) || EMPTY_NODE_ARRAY}
                     onPromptChange={handleNodePromptChange}
                     onConfigChange={handleConfigNodeChange}
                     onGenerate={handleGenerateNode}
@@ -3158,7 +3285,7 @@ function InfiniteCanvasPage() {
             <CanvasConfigNodePanel
                 node={contentNode}
                 isRunning={runningNodeId === contentNode.id}
-                inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
+                inputSummary={getInputSummary(configInputsById.get(contentNode.id) || EMPTY_INPUT_ARRAY)}
                 onConfigChange={handleConfigNodeChange}
                 onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
                 onStop={confirmStopGeneration}
@@ -3222,6 +3349,7 @@ function InfiniteCanvasPage() {
                     onCanvasDoubleClick={(event) => {
                         if (referencePickerNodeId) return;
                         setContextMenu(null);
+                        setNodeCreateMode("primary");
                         setNodeCreatePosition(screenToCanvas(event.clientX, event.clientY));
                     }}
                     onContextMenu={preventCanvasContextMenu}
@@ -3311,14 +3439,27 @@ function InfiniteCanvasPage() {
                     ) : null}
                     {pendingConnectionCreate ? <ConnectionCreateMenu pending={pendingConnectionCreate} onCreate={(type) => createConnectedNode(type, pendingConnectionCreate)} onClose={cancelPendingConnectionCreate} /> : null}
                     {nodeCreatePosition ? (
-                        <NodeCreateMenu
-                            position={nodeCreatePosition}
-                            onCreate={(type) => {
-                                createNode(type, nodeCreatePosition);
-                                setNodeCreatePosition(null);
-                            }}
-                            onClose={() => setNodeCreatePosition(null)}
-                        />
+                        nodeCreateMode === "secondary" ? (
+                            <NodeCreateMenu
+                                position={nodeCreatePosition}
+                                excludeTypes={primaryCreateTypes}
+                                onCreate={(type) => {
+                                    createNode(type, nodeCreatePosition);
+                                    setNodeCreatePosition(null);
+                                }}
+                                onClose={() => setNodeCreatePosition(null)}
+                            />
+                        ) : (
+                            <BaguaNodeCreateMenu
+                                position={nodeCreatePosition}
+                                onCreate={(type) => {
+                                    createNode(type, nodeCreatePosition);
+                                    setNodeCreatePosition(null);
+                                }}
+                                onMore={() => setNodeCreateMode("secondary")}
+                                onClose={() => setNodeCreatePosition(null)}
+                            />
+                        )
                     ) : null}
                 </InfiniteCanvas>
 
@@ -3362,42 +3503,57 @@ function InfiniteCanvasPage() {
                     />
                 ) : null}
 
-                <CanvasToolbar
-                    selectedCount={selectedNodeIds.size}
-                    canvasTool={canvasTool}
-                    canUndo={historyState.canUndo}
-                    canRedo={historyState.canRedo}
-                    backgroundMode={backgroundMode}
-                    showImageInfo={showImageInfo}
-                    backgroundMedia={backgroundMedia}
-                    backgroundOpacity={backgroundOpacity}
-                    fontOpacity={fontOpacity}
-                    nodeOpacity={nodeOpacity}
-                    onAddImage={() => createNode(CanvasNodeType.Image)}
-                    onAddVideo={() => createNode(CanvasNodeType.Video)}
-                    onAddAudio={() => createNode(CanvasNodeType.Audio)}
-                    onAddText={() => createNode(CanvasNodeType.Text)}
-                    onAddConfig={() => createNode(CanvasNodeType.Config)}
-                    onAddGroup={() => createNode(CanvasNodeType.Group)}
-                    onAddExtensionNode={(type) => createNode(type)}
-                    onUndo={undoCanvas}
-                    onRedo={redoCanvas}
-                    onUpload={() => handleUploadRequest()}
-                    onDelete={() => deleteNodes(new Set(selectedNodeIds))}
-                    onClear={() => setClearConfirmOpen(true)}
-                    onCanvasToolChange={setCanvasTool}
-                    onBackgroundModeChange={setBackgroundMode}
-                    onShowImageInfoChange={setShowImageInfo}
-                    onSelectBackgroundMedia={(file) => void selectBackgroundMedia(file)}
-                    onClearBackgroundMedia={clearBackgroundMedia}
-                    onBackgroundOpacityChange={setBackgroundOpacity}
-                    onFontOpacityChange={setFontOpacity}
-                    onNodeOpacityChange={setNodeOpacity}
-                />
+                {/* 底部工具坞自动收纳：默认下沉隐藏；鼠标移到底部热区或点击唤起，移出 800ms 后自动收起。
+                    外层 pointer-events-none，只有热区条捕获悬停；唤起后坞内按钮恢复可点（各自组件自带 pointer-events）。
+                    提示：坞内弹层（外观面板/扩展列表等）也是本容器后代，悬停进去不会误收起。 */}
+                <div
+                    className="pointer-events-none absolute inset-x-0 bottom-0 z-50 h-24"
+                    onMouseEnter={wakeBottomDock}
+                    onMouseLeave={scheduleBottomDockHide}
+                >
+                    {/* 唤醒热区：触屏上坞本来就常驻，热区若继续吃掉这 56px，画布底部就没法拖了。 */}
+                    <div className={`${isCoarsePointerEnv ? "pointer-events-none" : "pointer-events-auto"} absolute inset-x-0 bottom-0 h-14`} onClick={wakeBottomDock} aria-hidden />
+                    <div className={`absolute inset-0 transition-all duration-200 ease-out ${bottomDockAwake ? "visible translate-y-0 opacity-100" : "invisible translate-y-10 opacity-0"}`}>
+                        <div className="absolute inset-0">
+                            <CanvasToolbar
+                                selectedCount={selectedNodeIds.size}
+                                canvasTool={canvasTool}
+                                canUndo={historyState.canUndo}
+                                canRedo={historyState.canRedo}
+                                backgroundMode={backgroundMode}
+                                showImageInfo={showImageInfo}
+                                backgroundMedia={backgroundMedia}
+                                backgroundOpacity={backgroundOpacity}
+                                fontOpacity={fontOpacity}
+                                nodeOpacity={nodeOpacity}
+                                onAddImage={() => createNode(CanvasNodeType.Image)}
+                                onAddVideo={() => createNode(CanvasNodeType.Video)}
+                                onAddAudio={() => createNode(CanvasNodeType.Audio)}
+                                onAddText={() => createNode(CanvasNodeType.Text)}
+                                onAddConfig={() => createNode(CanvasNodeType.Config)}
+                                onAddGroup={() => createNode(CanvasNodeType.Group)}
+                                onAddExtensionNode={(type) => createNode(type)}
+                                onUndo={undoCanvas}
+                                onRedo={redoCanvas}
+                                onUpload={() => handleUploadRequest()}
+                                onDelete={() => deleteNodes(new Set(selectedNodeIds))}
+                                onClear={() => setClearConfirmOpen(true)}
+                                onCanvasToolChange={setCanvasTool}
+                                onBackgroundModeChange={setBackgroundMode}
+                                onShowImageInfoChange={setShowImageInfo}
+                                onSelectBackgroundMedia={(file) => void selectBackgroundMedia(file)}
+                                onClearBackgroundMedia={clearBackgroundMedia}
+                                onBackgroundOpacityChange={setBackgroundOpacity}
+                                onFontOpacityChange={setFontOpacity}
+                                onNodeOpacityChange={setNodeOpacity}
+                            />
+
+                            <CanvasZoomControls scale={viewport.k} onScaleChange={setZoomScale} onReset={resetViewport} isMiniMapOpen={isMiniMapOpen} onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)} />
+                        </div>
+                    </div>
+                </div>
 
                 {isMiniMapOpen ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} onViewportChange={setViewport} /> : null}
-
-                <CanvasZoomControls scale={viewport.k} onScaleChange={setZoomScale} onReset={resetViewport} isMiniMapOpen={isMiniMapOpen} onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)} />
 
                 {contextMenu ? (
                     <CanvasNodeContextMenu

@@ -1,0 +1,398 @@
+/**
+ * WorkBuddy 专家卡片样式（提取自 WorkBuddy 客户端的 ui-docs-viewer.css）
+ *
+ * 规则与设计变量逐字取自 WorkBuddy，仅做两处适配：
+ *   1) 变量内联在 `.wb-ec-scope`（亮色）与 `.dark .wb-ec-scope`（暗色）作用域内，不污染画布既有样式；
+ *   2) 保留原类名（`ec-*`），使结构与 WorkBuddy 专家中心一一对应，便于比对与后续同步。
+ *
+ * 结构与 WorkBuddy 一致：.ec-expert-card > [召唤按钮] + .ec-card-main
+ *   .ec-card-head（.ec-card-avatar-sq + .ec-card-body[.ec-card-title-row(.ec-card-role + 徽标) + .ec-card-subtitle]）
+ *   .ec-card-desc（两行截断）
+ *   .ec-card-tags > .ec-card-tag ×3
+ */
+
+.wb-ec-scope {
+  --ec-operational-tag-check-color: #f7d18f;
+  --ec-operational-tag-icon-color: #3d3d3d;
+  --ec-avatar-fallback-bg-1: #6366f1;
+  --ec-avatar-fallback-bg-2: #8b5cf6;
+  --ec-avatar-fallback-bg-3: #ec4899;
+  --ec-avatar-fallback-bg-4: #f59e0b;
+  --ec-avatar-fallback-bg-5: #10b981;
+  --ec-avatar-fallback-bg-6: #3b82f6;
+  --ec-avatar-fallback-bg-7: #ef4444;
+  --ec-avatar-fallback-bg-8: #14b8a6;
+  --wb-avatar-bg-accent: var(--wb-palette-cyan-2);
+  --wb-bg-card: var(--wb-palette-white-100);
+  --wb-bg-card-hover: color-mix(in srgb, var(--wb-palette-black-100) 6%, var(--wb-bg-card));
+  --wb-bg-hover: var(--wb-bg-hover-light);
+  --wb-bg-hover-light: var(--wb-palette-gray-3);
+  --wb-border-card-static: #f2f2f2;
+  --wb-border-default: color-mix(in srgb, var(--wb-palette-black-100) 8%, transparent);
+  --wb-button-primary-bg: var(--wb-palette-black-90);
+  --wb-button-primary-bg-hover: var(--wb-palette-black-75);
+  --wb-button-primary-fg: var(--wb-palette-white-100);
+  --wb-color-text-primary: var(--wb-palette-black-100);
+  --wb-color-text-secondary: var(--wb-palette-black-70);
+  --wb-palette-black-100: #000000;
+  --wb-palette-black-70: rgba(0, 0, 0, 0.7);
+  --wb-palette-black-75: rgba(0, 0, 0, 0.75);
+  --wb-palette-black-90: rgba(0, 0, 0, 0.9);
+  --wb-palette-cyan-2: #a6d5da;
+  --wb-palette-cyan-6: #14b8a6;
+  --wb-palette-gray-3: #F2F2F2;
+  --wb-palette-white-100: #FFFFFF;
+  --wb-palette-white-75: rgba(255, 255, 255, 0.75);
+  --wb-palette-white-90: rgba(255, 255, 255, 0.9);
+  --wb-shadow-card-soft: 0 16px 32px -8px rgba(0, 0, 0, 0.03);
+  --wb-tag-operational-text: #393939;
+}
+
+.dark .wb-ec-scope {
+  --ec-operational-tag-check-color: #242424;
+  --ec-operational-tag-icon-color: #d0d0d0;
+  --ec-avatar-fallback-bg-1: #6366f1;
+  --ec-avatar-fallback-bg-2: #8b5cf6;
+  --ec-avatar-fallback-bg-3: #ec4899;
+  --ec-avatar-fallback-bg-4: #f59e0b;
+  --ec-avatar-fallback-bg-5: #10b981;
+  --ec-avatar-fallback-bg-6: #3b82f6;
+  --ec-avatar-fallback-bg-7: #ef4444;
+  --ec-avatar-fallback-bg-8: #14b8a6;
+  --wb-avatar-bg-accent: var(--wb-palette-cyan-6);
+  --wb-bg-card: #242424;
+  --wb-bg-card-hover: color-mix(in srgb, var(--wb-palette-white-100) 6%, var(--wb-bg-card));
+  --wb-bg-hover: color-mix(in srgb, var(--wb-palette-white-100) 6%, transparent);
+  --wb-bg-hover-light: color-mix(in srgb, var(--wb-palette-white-100) 8%, transparent);
+  --wb-border-card-static: transparent;
+  --wb-border-default: color-mix(in srgb, var(--wb-palette-white-100) 14%, transparent);
+  --wb-button-primary-bg: var(--wb-palette-white-90);
+  --wb-button-primary-bg-hover: var(--wb-palette-white-75);
+  --wb-button-primary-fg: var(--wb-palette-black-90);
+  --wb-color-text-primary: rgba(255, 255, 255, 1);
+  --wb-color-text-secondary: rgba(255, 255, 255, 0.65);
+  --wb-palette-cyan-2: #1A3530;
+  --wb-palette-cyan-6: #7AAFB6;
+  --wb-palette-gray-3: #1f1f1f;
+  --wb-shadow-card-soft: 0 16px 32px -8px rgba(0, 0, 0, 0.30);
+  --wb-tag-operational-text: #C0C0C0;
+}
+
+@keyframes fadeInUp {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ec-expert-grid {
+display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(288px, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+
+.ec-expert-grid-item {
+display: flex;
+  min-width: 0;
+}
+
+.ec-expert-grid-item > .ec-expert-card {
+width: 100%;
+}
+
+.ec-expert-card {
+display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 154px;
+  padding: 16px 20px;
+  background: var(--wb-bg-card);
+  border: 1px solid var(--wb-border-card-static);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--wb-shadow-card-soft);
+  box-sizing: border-box;
+  opacity: 0;
+  transform: translateY(4px);
+  animation-delay: var(--delay, 0s);
+  animation: fadeInUp 0.25s ease forwards;
+}
+
+.ec-expert-card:focus-visible {
+box-shadow: 0 0 0 2px var(--wb-border-default), var(--wb-shadow-card-soft);
+}
+
+.ec-expert-card:hover {
+background: var(--wb-bg-card-hover);
+  border-color: var(--wb-border-default);
+  box-shadow: var(--wb-shadow-card-soft);
+  transform: translateY(0);
+}
+
+.ec-card-main {
+display: flex;
+  flex-direction: column;
+  gap: 12px;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.ec-card-main:focus-visible {
+box-shadow: 0 0 0 2px var(--wb-border-default);
+}
+
+.ec-card-head {
+display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.ec-card-avatar-sq {
+width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--wb-avatar-bg-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ec-card-avatar-sq img {
+width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ec-avatar-sq-fallback {
+width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--wb-button-primary-fg);
+  border-radius: 50%;
+}
+
+.ec-card-body {
+display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ec-card-title-row {
+display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ec-card-tags {
+display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ec-card-tag {
+display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--wb-bg-hover);
+  color: var(--wb-color-text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 20px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ec-card-subtitle {
+color: var(--wb-color-text-primary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ec-card-role-wrap {
+display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ec-card-role {
+flex: 0 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--wb-color-text-primary);
+  line-height: 20px;
+  letter-spacing: 0;
+  margin-bottom: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ec-card-operational-tag {
+display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  max-width: 110px;
+  padding: 2px 6px;
+  gap: 2px;
+  border-radius: 6px;
+  background: var(--wb-bg-hover);
+  color: var(--wb-tag-operational-text);
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.ec-card-operational-tag__icon {
+flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  /* 图标底色来自 ardot 对话框/盾牌形标识 */
+  color: var(--wb-tag-operational-text);
+}
+
+.ec-card-operational-tag__text {
+min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ec-card-desc {
+width: 100%;
+  color: var(--wb-color-text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 18px;
+  display: -webkit-box;
+  line-clamp: 2;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 36px;
+}
+
+.ec-card-summon-btn {
+display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: var(--wb-button-primary-bg);
+  color: var(--wb-button-primary-fg);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 24px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  box-shadow: none;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  outline: none;
+}
+
+/* 召唤按钮：默认隐藏，卡片 hover / 键盘聚焦时浮现于右上角。 */
+.ec-card-summon-btn--top {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+/* 召唤按钮左侧渐变遮罩：长标题滚到按钮下方时平滑淡出到卡片背景色，避免文字被硬切。
+   作为按钮伪元素，opacity 随按钮一起淡入淡出，无需额外 hover 选择器。 */
+.ec-card-summon-btn--top::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 100%;
+  width: 40px;
+  height: 100%;
+  background: linear-gradient(to right, transparent, var(--wb-bg-card));
+  pointer-events: none;
+}
+
+.ec-expert-card:hover .ec-card-summon-btn--top::before, .ec-expert-card:focus-within .ec-card-summon-btn--top::before {
+background: linear-gradient(to right, transparent, color-mix(in srgb, var(--wb-palette-black-100) 5%, var(--wb-bg-card)));
+}
+
+.ec-expert-card:hover .ec-card-summon-btn--top, .ec-expert-card:focus-within .ec-card-summon-btn--top {
+opacity: 1;
+  pointer-events: auto;
+}
+
+.ec-card-summon-btn:hover {
+background: var(--wb-button-primary-bg-hover);
+  color: var(--wb-button-primary-fg);
+  border-color: transparent;
+}
+
+.ec-card-summon-btn:focus, .ec-card-summon-btn:focus-visible, .ec-card-summon-btn:active {
+background: var(--wb-button-primary-bg-hover);
+  color: var(--wb-button-primary-fg);
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+  outline: none;
+}
+
+.ec-card-avatar-sq {
+position: relative;
+}
+
+.ec-card-avatar-sq img {
+position: absolute;
+  inset: 0;
+}
+
+.ec-card-avatar-sq img.is-pending {
+  visibility: hidden;
+}
+
+/* 系统关闭动效时直接落位：入场动画以 opacity:0 起手，被禁用后卡片会停在不可见状态。 */
+@media (prefers-reduced-motion: reduce) {
+  .ec-expert-card {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+}

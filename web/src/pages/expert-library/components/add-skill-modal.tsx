@@ -3,8 +3,9 @@ import { Alert, App, Button, Checkbox, Form, Input, Modal, Spin, Tabs, Tag } fro
 import { Check, CircleAlert, FileArchive, FolderUp, GitBranch, Globe, Link2, LoaderCircle, ShieldAlert, ShieldCheck, Sparkles, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { ensureAgentTarget, installAgentSkill, type AgentTarget } from "../agent-bridge";
+import { agentEndpointReachable, ensureAgentTarget, installAgentSkill, listAgentSkills, waitForAgentEndpoint, type AgentTarget } from "../agent-bridge";
 import { fetchRemoteSkills, parseLocalSkills, parseRemoteSource, riskScan, type RemoteErrorCode, type SkillParseErrorCode } from "../skill-source";
+import { AgentApiError, fetchCodexSkill, updateCodexSkill } from "@/services/api/canvas-agent";
 import type { ParsedSkill } from "../data/types";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,7 @@ export function AddSkillModal({
     const [parsed, setParsed] = useState<ParsedSkill[] | null>(null);
     const [failures, setFailures] = useState<{ name: string; code: SkillParseErrorCode }[]>([]);
     const [autoInstall, setAutoInstall] = useState(true);
+    const [conflictSkills, setConflictSkills] = useState<ParsedSkill[] | null>(null);
     const [link, setLink] = useState("");
     const [linking, setLinking] = useState(false);
     const [remoteError, setRemoteError] = useState<RemoteErrorCode | null>(null);
@@ -62,6 +64,7 @@ export function AddSkillModal({
         setParsed(null);
         setFailures([]);
         setRemoteError(null);
+        setConflictSkills(null);
         setLink("");
         setAiPrompt("");
         form.resetFields();
@@ -73,6 +76,8 @@ export function AddSkillModal({
         folderInputRef.current?.setAttribute("directory", "");
     }, [open]);
 
+    const describeInstallError = (error: unknown) => (error instanceof Error ? error.message : t("expertLibrary.addSkill.installFailed"));
+
     const install = async (skills: ParsedSkill[], silent = false) => {
         if (!skills.length) return;
         const target: AgentTarget | null = await ensureAgentTarget();
@@ -80,9 +85,20 @@ export function AddSkillModal({
             onRequireAgent();
             return;
         }
+        // 未连接时先探测本机 Agent：它可能正在启动中（冷启动需数秒），短暂等待；
+        // 确实不可达则引导去连接，而不是让安装请求裸报 “Failed to fetch”。
+        if (!connected && !(await agentEndpointReachable(target.endpoint))) {
+            if (!silent) message.info(t("expertLibrary.addSkill.agentWaiting"));
+            if (!(await waitForAgentEndpoint(target.endpoint))) {
+                message.error(t("expertLibrary.addSkill.agentUnreachable", { endpoint: target.endpoint }));
+                onRequireAgent();
+                return;
+            }
+        }
         setInstalling(true);
         const done: ParsedSkill[] = [];
         const failed: string[] = [];
+        const conflicts: ParsedSkill[] = [];
         for (const skill of skills) {
             try {
                 await installAgentSkill(target, {
@@ -93,13 +109,88 @@ export function AddSkillModal({
                 });
                 done.push(skill);
             } catch (error) {
-                failed.push(`${skill.name}：${error instanceof Error ? error.message : t("expertLibrary.addSkill.installFailed")}`);
+                // 409 = 本机已有同名技能（内容 / 功能可能不同），交给用户选择覆盖或换名，不算安装失败。
+                if (error instanceof AgentApiError && error.status === 409) conflicts.push(skill);
+                else failed.push(`${skill.name}：${describeInstallError(error)}`);
             }
         }
         setInstalling(false);
         if (done.length) {
             onInstalled(done);
             if (!silent) message.success(t("expertLibrary.addSkill.installed", { count: done.length }));
+        }
+        if (failed.length) {
+            message.error(t("expertLibrary.addSkill.installPartial", { failed: failed.join("；") }));
+        }
+        if (conflicts.length) {
+            setConflictSkills(conflicts);
+            return;
+        }
+        if (done.length && !failed.length) {
+            setParsed(null);
+            onClose();
+        }
+    };
+
+    /** 同名冲突解决：overwrite = 带 revision 覆盖现有技能；rename = 自动加 -2~-9 后缀换名安装。 */
+    const resolveConflicts = async (mode: "overwrite" | "rename") => {
+        const skills = conflictSkills || [];
+        setConflictSkills(null);
+        if (!skills.length) return;
+        const target: AgentTarget | null = await ensureAgentTarget();
+        if (!target) {
+            onRequireAgent();
+            return;
+        }
+        setInstalling(true);
+        const done: ParsedSkill[] = [];
+        const failed: string[] = [];
+        if (mode === "overwrite") {
+            for (const skill of skills) {
+                try {
+                    const detail = await fetchCodexSkill(target.endpoint, target.token, skill.name);
+                    await updateCodexSkill(target.endpoint, target.token, skill.name, {
+                        description: skill.description,
+                        instructions: skill.instructions,
+                        ...(skill.interface ? { interface: skill.interface } : {}),
+                        expectedRevision: detail.data?.revision || "",
+                    });
+                    done.push(skill);
+                } catch (error) {
+                    failed.push(`${skill.name}：${describeInstallError(error)}`);
+                }
+            }
+        } else {
+            const existing = new Set(((await listAgentSkills()) || []).map((skill) => skill.name.toLowerCase()));
+            for (const skill of skills) {
+                let installed = false;
+                let lastError = "";
+                for (let suffix = 2; suffix <= 9 && !installed; suffix++) {
+                    const candidate = `${skill.name}-${suffix}`.slice(0, 64);
+                    if (existing.has(candidate)) continue;
+                    try {
+                        await installAgentSkill(target, {
+                            name: candidate,
+                            description: skill.description,
+                            instructions: skill.instructions,
+                            ...(skill.interface ? { interface: skill.interface } : {}),
+                        });
+                        existing.add(candidate);
+                        done.push({ ...skill, name: candidate });
+                        installed = true;
+                    } catch (error) {
+                        if (error instanceof AgentApiError && error.status === 409) continue;
+                        lastError = describeInstallError(error);
+                        break;
+                    }
+                }
+                if (!installed) failed.push(`${skill.name}：${lastError || t("expertLibrary.addSkill.conflictNoName")}`);
+            }
+        }
+        setInstalling(false);
+        if (done.length) {
+            onInstalled(done);
+            message.success(t("expertLibrary.addSkill.installed", { count: done.length }));
         }
         if (failed.length) {
             message.error(t("expertLibrary.addSkill.installPartial", { failed: failed.join("；") }));
@@ -547,6 +638,41 @@ export function AddSkillModal({
                     },
                 ]}
             />
+
+            <Modal
+                title={t("expertLibrary.addSkill.conflictTitle", { count: conflictSkills?.length || 0 })}
+                open={!!conflictSkills}
+                onCancel={() => (installing ? undefined : setConflictSkills(null))}
+                footer={
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                        <Button disabled={installing} onClick={() => setConflictSkills(null)}>
+                            {t("expertLibrary.addSkill.conflictKeep")}
+                        </Button>
+                        <Button disabled={installing} onClick={() => void resolveConflicts("rename")}>
+                            {t("expertLibrary.addSkill.conflictRename")}
+                        </Button>
+                        <Button type="primary" danger disabled={installing} onClick={() => void resolveConflicts("overwrite")}>
+                            {t("expertLibrary.addSkill.conflictOverwrite")}
+                        </Button>
+                    </div>
+                }
+                width={520}
+                centered
+            >
+                <p className="text-sm leading-6 text-stone-600 dark:text-stone-300">
+                    {t("expertLibrary.addSkill.conflictDesc", {
+                        names: (conflictSkills || []).map((skill) => skill.name).join("、"),
+                        example: `${(conflictSkills || [])[0]?.name || "skill"}-2`,
+                    })}
+                </p>
+                <ul className="mt-2 list-disc space-y-0.5 pl-5 text-xs text-stone-500 dark:text-stone-400">
+                    {(conflictSkills || []).map((skill) => (
+                        <li key={skill.name}>
+                            <span className="font-medium text-stone-700 dark:text-stone-200">{skill.name}</span> — {skill.description}
+                        </li>
+                    ))}
+                </ul>
+            </Modal>
         </Modal>
     );
 }

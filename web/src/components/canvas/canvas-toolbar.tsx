@@ -4,6 +4,7 @@ import { Button, Segmented, Slider, Switch } from "antd";
 import { CircleDot, Eraser, Grid2x2, Group, Hand, Image as ImageIcon, Info, Moon, MousePointer2, Music2, Palette, Puzzle, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
 
 import { canvasThemes, type CanvasBackgroundMedia, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
+import { useCanvasEnvironment } from "@/lib/canvas-environment";
 import { getNodePluginId, listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
@@ -75,6 +76,7 @@ export function CanvasToolbar({
     const wrapRef = useRef<HTMLDivElement>(null);
     const backgroundMediaInputRef = useRef<HTMLInputElement>(null);
     const { t } = useTranslation();
+    const { compact } = useCanvasEnvironment();
     const rootRef = useRef<HTMLDivElement>(null);
     const colorTheme = useThemeStore((state) => state.theme);
     const setTheme = useThemeStore((state) => state.setTheme);
@@ -107,7 +109,9 @@ export function CanvasToolbar({
     }, [extensionsOpen, appearanceOpen]);
 
     return (
-        <div ref={rootRef} className="pointer-events-none absolute bottom-5 z-50 flex justify-center" style={{ left: 300, right: 16 }}>
+        // left 原本写死 300（给左侧 ASIDE 留位）：手机上侧栏默认收起，这里要跟着让开，否则工具栏被挤出屏幕。
+        // 桌面端 300/16 保持不变；坞身自带横向滚动，窄屏放不下自可滑动。
+        <div ref={rootRef} className="pointer-events-none absolute bottom-5 z-50 flex justify-center" style={{ left: compact ? 12 : 300, right: compact ? 12 : 16 }}>
             {tip ? <DockTip label={tip} x={tipX} theme={theme} /> : null}
             <div ref={wrapRef} className="thin-scrollbar pointer-events-auto flex h-14 max-w-full items-center gap-1 overflow-x-auto rounded-xl border px-2 shadow-lg backdrop-blur [&>*]:shrink-0" style={dockStyle}>
                 <ToolbarButton id={`tool-${canvasTool}`} label={t(`canvas.toolbar.${canvasTool}`)} active hovered={hovered} activeStyle={activeStyle} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={() => onCanvasToolChange(canvasTool === "select" ? "pan" : "select")}>
@@ -329,7 +333,9 @@ export function CanvasToolbar({
  */
 function OpacitySlider({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
     const { t } = useTranslation();
-    const percent = Math.round(Math.min(Math.max(value, 0), 1) * 100);
+    // 防御旧工程数据里的非法透明度（NaN/越界/非数字）：滑杆只接受 0~100 的有限数字，否则 React #185 崩页。
+    const safeValue = Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 1;
+    const percent = Math.round(safeValue * 100);
     return (
         <div className="mt-2.5 grid gap-0.5 px-1">
             <div className="flex items-center justify-between gap-2">

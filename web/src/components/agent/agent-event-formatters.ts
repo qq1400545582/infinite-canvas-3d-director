@@ -1,4 +1,5 @@
 import { isSiteTool, SITE_TOOL_LABELS } from "@/lib/agent/agent-site-tools";
+import { resolveAgentPlatformLabel } from "@/lib/agent/agent-platform";
 import i18n from "@/i18n";
 import { summarizeCanvasAgentOps, type CanvasAgentOp } from "@/lib/canvas/canvas-agent-ops";
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
@@ -67,8 +68,18 @@ export function agentAttachmentToChatAttachment(item: AgentMessageAttachment, en
 
 export function formatAgentEvent(event: AgentEventPayload): Omit<AgentChatItem, "id"> | null {
     const item = event.item;
-    if (event.type === "item.completed" && item?.type === "agent_message") return { role: "assistant", title: "Codex", text: stringText(item.text) };
+    if (event.type === "item.completed" && item?.type === "agent_message") return { role: "assistant", title: agentAuthorLabel(), text: stringText(item.text) };
     return null;
+}
+
+/**
+ * 助手消息的署名。
+ *
+ * 本地 Agent 可以被 Codex、DeepSeek Harness、WorkBuddy、Trae 等任意平台拉起，
+ * 署名跟着打开画布的平台走，判断不出来就用中性称呼，不写死某一个平台。
+ */
+function agentAuthorLabel() {
+    return resolveAgentPlatformLabel(useAgentStore.getState().platformSource, i18n.t("agent.platform.generic"));
 }
 
 export function formatAgentActivity(event: AgentEventPayload): Omit<AgentChatItem, "id"> | null {

@@ -11,6 +11,7 @@ import HomePage from "@/pages/home";
 import ImagePage from "@/pages/image";
 import NotFound from "@/pages/not-found";
 import PromptsPage from "@/pages/prompts";
+import SendPage from "@/pages/send";
 import VideoPage from "@/pages/video";
 
 export const router = createBrowserRouter([
@@ -33,5 +34,8 @@ export const router = createBrowserRouter([
             { path: "/experts", element: <ExpertLibraryPage /> },
         ],
     },
+    // 发送台刻意放在 UserLayout 之外：任何能打开 http://127.0.0.1:3000/send 的浏览器 /
+    // 桌面工具内置浏览器都能直接用，不依赖站点导航与登录态。
+    { path: "/send", element: <SendPage /> },
     { path: "*", element: <NotFound /> },
 ]);

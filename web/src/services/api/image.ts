@@ -2,6 +2,7 @@ import axios from "axios";
 
 import i18n from "@/i18n";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
+import { useAgentStore } from "@/stores/use-agent-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
@@ -337,6 +338,51 @@ function readStatusError(status: number | undefined, fallback: string) {
     return status ? apiText("httpFailed", { status }) : fallback;
 }
 
+/** 带上 HTTP 状态的上游错误：判断「是否该换请求形状重试」需要状态码，光有 message 不够。 */
+export class UpstreamRequestError extends Error {
+    constructor(
+        message: string,
+        readonly status?: number,
+    ) {
+        super(message);
+        this.name = "UpstreamRequestError";
+    }
+}
+
+/** 上游把整份 pydantic 校验转储塞进 error.message（可达数千字符），这里压成「首条原因 + 提示」。 */
+const VALIDATION_DUMP = /validation errors? for|field required|input_value=|value_error|invalid_request_error/i;
+
+/**
+ * 压缩上游校验转储：只留第一条真正的原因（去掉 loc/type/input_value 这类噪声尾巴），
+ * 再补一句可操作提示。特征不明显就原样返回，**不做任何猜测性改写**。
+ */
+export function condenseUpstreamError(message: string): string {
+    const text = String(message || "");
+    if (text.length <= 240 || !VALIDATION_DUMP.test(text)) return text;
+    // 取第一段错误：形如 "1 validation error for ChatCompletionRequest:\nbody.messages.0.role\n  Field required ..."
+    const lines = text.split(/\r?\n/);
+    const firstIndex = lines.findIndex((line) => /^\s*\d+\s+validation error/.test(line) || VALIDATION_DUMP.test(line));
+    const head = (firstIndex >= 0 ? lines.slice(firstIndex) : lines).map((line) => line.trim()).filter(Boolean);
+    const reason = head.slice(0, 3).join(" ").replace(/\s{2,}/g, " ").trim();
+    const keep = reason.slice(0, 180);
+    return `${apiText("upstreamValidation", { reason: keep })}`;
+}
+
+/**
+ * 判断这次失败是否值得换一种请求形状（chat/completions）重试。
+ *
+ * 背景：画布文本（含带图反推）默认发 `/v1/responses`。不少第三方网关只认 chat/completions，
+ * 收到 Responses 形状的 `input` / `input_image` 会回 400 + 一大段校验错误。
+ * 这类失败换形状就能成；而鉴权 / 额度 / 限流 / 服务端错误换形状没有意义，重试只是浪费配额。
+ */
+export function isUpstreamShapeMismatch(error: unknown): boolean {
+    if (!(error instanceof UpstreamRequestError)) return false;
+    const status = error.status ?? 0;
+    if (![400, 404, 405, 415, 422].includes(status)) return false;
+    if (status === 404) return true; // 网关根本没有 /v1/responses
+    return VALIDATION_DUMP.test(String(error.message || "")) || /unknown|unsupported|not support|unrecognized|role must be|参数|校验/i.test(String(error.message || ""));
+}
+
 function withSystemPrompt(config: AiConfig, prompt: string) {
     const systemPrompt = config.systemPrompt.trim();
     return systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
@@ -451,11 +497,11 @@ function validateGeminiPayload(payload: GeminiPayload) {
 
 async function readFetchError(response: Response, fallback: string) {
     const text = await response.text();
-    if (!text) return readStatusError(response.status, fallback);
+    if (!text) return new UpstreamRequestError(readStatusError(response.status, fallback), response.status);
     try {
-        return responseErrorMessage(JSON.parse(text)) || readStatusError(response.status, fallback);
+        return new UpstreamRequestError(condenseUpstreamError(responseErrorMessage(JSON.parse(text)) || readStatusError(response.status, fallback)), response.status);
     } catch {
-        return text.slice(0, 300) || readStatusError(response.status, fallback);
+        return new UpstreamRequestError(condenseUpstreamError(text.slice(0, 300) || readStatusError(response.status, fallback)), response.status);
     }
 }
 
@@ -501,6 +547,95 @@ function consumeResponseStreamText(state: ResponseStreamState, text: string, onD
     }
 }
 
+/**
+ * 内部消息 → chat/completions 的 `messages`。
+ * 内部形状本来就是 chat 规范（`content: [{type:'text'|'image_url', …}]`），这里只需
+ * 剔除 Responses 专属项（function_call / role:'tool' / thoughtSignature），保持内容原样。
+ */
+function toChatMessages(messages: ResponseInputMessage[]): Array<Record<string, unknown>> {
+    return messages.flatMap((message) => {
+        if ("type" in message) return message.type === "function_call" ? [] : [];
+        if (message.role === "tool") return [];
+        return [{ role: message.role, content: message.content }];
+    });
+}
+
+/** 解析 chat/completions 的流式分片：choices[0].delta.content 累积。 */
+function consumeChatStreamBlock(block: string, state: ResponseStreamState, onDelta?: (text: string) => void) {
+    const data = block
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).replace(/^ /, ""))
+        .join("\n")
+        .trim();
+    if (!data || data === "[DONE]") return;
+    let event: Record<string, unknown>;
+    try {
+        event = JSON.parse(data) as Record<string, unknown>;
+    } catch {
+        return; // 网关偶发非 JSON 心跳行，忽略即可
+    }
+    const errorMessage = responseErrorMessage(event);
+    if (errorMessage) state.error = errorMessage;
+    const choices = Array.isArray(event.choices) ? event.choices : [];
+    for (const choice of choices) {
+        const payload = (choice as { delta?: { content?: unknown }; message?: { content?: unknown } }) || {};
+        const piece = typeof payload.delta?.content === "string" ? payload.delta.content : typeof payload.message?.content === "string" ? payload.message.content : "";
+        if (!piece) continue;
+        state.text += piece;
+        onDelta?.(state.text);
+    }
+}
+
+/** 往 chat 流式缓冲里追加文本，按空行切块交给 consumeChatStreamBlock。 */
+function feedChatStream(state: ResponseStreamState, text: string, onDelta?: (text: string) => void, flush = false) {
+    state.buffer += text;
+    for (;;) {
+        const match = state.buffer.match(/\r?\n\r?\n/);
+        if (!match) break;
+        const index = match.index ?? 0;
+        consumeChatStreamBlock(state.buffer.slice(0, index), state, onDelta);
+        state.buffer = state.buffer.slice(index + match[0].length);
+    }
+    if (flush && state.buffer.trim()) {
+        consumeChatStreamBlock(state.buffer, state, onDelta);
+        state.buffer = "";
+    }
+}
+
+/**
+ * chat/completions 流式请求（Responses 形状不被网关接受时的回退通路）。
+ * 与 requestStreamingResponse 同构：优先读 SSE，部分网关忽略 stream 参数时回落非流式 JSON。
+ */
+async function requestChatCompletionStreaming(config: AiConfig, messages: ResponseInputMessage[], onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
+    const response = await fetch(aiApiUrl(config, "/chat/completions"), {
+        method: "POST",
+        headers: { ...aiHeaders(config, "application/json"), Accept: "text/event-stream" },
+        body: JSON.stringify({ model: config.model, messages: toChatMessages(messages), stream: true }),
+        signal: options?.signal,
+    });
+    if (!response.ok) throw await readFetchError(response, apiText("requestFailed"));
+    if (!response.body) {
+        const payload = (await response.json()) as { choices?: Array<{ message?: { content?: unknown } }>; error?: { message?: string } };
+        if (payload.error?.message) throw new UpstreamRequestError(condenseUpstreamError(payload.error.message), response.status);
+        const content = typeof payload.choices?.[0]?.message?.content === "string" ? payload.choices[0]!.message!.content! : "";
+        if (content) onDelta?.(content);
+        return { content, toolCalls: [] };
+    }
+    const state: ResponseStreamState = { text: "", buffer: "" };
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        feedChatStream(state, decoder.decode(value, { stream: true }), onDelta);
+        if (state.error) throw new UpstreamRequestError(condenseUpstreamError(state.error), response.status);
+    }
+    feedChatStream(state, decoder.decode(), onDelta, true);
+    if (state.error) throw new UpstreamRequestError(condenseUpstreamError(state.error), response.status);
+    return { content: state.text, toolCalls: [] };
+}
+
 async function requestStreamingResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
     const response = await fetch(aiApiUrl(config, "/responses"), {
         method: "POST",
@@ -508,7 +643,7 @@ async function requestStreamingResponse(config: AiConfig, body: Record<string, u
         body: JSON.stringify({ ...body, stream: true }),
         signal: options?.signal,
     });
-    if (!response.ok) throw new Error(await readFetchError(response, apiText("requestFailed")));
+    if (!response.ok) throw await readFetchError(response, apiText("requestFailed"));
     if (!response.body) {
         const payload = (await response.json()) as ResponseApiPayload;
         validateResponsePayload(payload);
@@ -615,7 +750,7 @@ async function requestGeminiStreamingResponse(config: AiConfig, body: Record<str
         body: JSON.stringify(body),
         signal: options?.signal,
     });
-    if (!response.ok) throw new Error(await readFetchError(response, apiText("requestFailed")));
+    if (!response.ok) throw await readFetchError(response, apiText("requestFailed"));
     if (!response.body) {
         const payload = (await response.json()) as GeminiPayload;
         return parseGeminiToolResponse(payload);
@@ -756,27 +891,31 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
     const background = normalizeBackground(config.background);
+    const promptText = withSystemPrompt(requestConfig, prompt);
     try {
-        const response = await axios.post<ImageApiResponse>(
-            aiApiUrl(requestConfig, "/images/generations"),
-            {
-                model: requestConfig.model,
-                prompt: withSystemPrompt(requestConfig, prompt),
-                n,
-                ...(quality ? { quality } : {}),
-                ...(requestSize ? { size: requestSize } : {}),
-                ...(background ? { background } : {}),
-                // gpt-image models reject response_format; they always return b64.
-                ...(/gpt-image/.test(requestConfig.model) ? {} : { response_format: "b64_json" }),
-                output_format: IMAGE_OUTPUT_FORMAT,
-            },
-            {
-                headers: aiHeaders(requestConfig, "application/json"),
-                signal: options?.signal,
-                timeout: IMAGE_REQUEST_TIMEOUT_MS,
-            },
-        );
-        const images = await parseImagePayload(response.data);
+        const images = await withImageFieldFallback(async (skip) => {
+            const response = await axios.post<ImageApiResponse>(
+                aiApiUrl(requestConfig, "/images/generations"),
+                {
+                    model: requestConfig.model,
+                    prompt: promptText,
+                    n: skip.has("n") ? undefined : n,
+                    ...(quality && !skip.has("quality") ? { quality } : {}),
+                    ...(requestSize && !skip.has("size") ? { size: requestSize } : {}),
+                    ...(background && !skip.has("background") ? { background } : {}),
+                    // gpt-image models reject response_format; they always return b64.
+                    ...(/gpt-image/.test(requestConfig.model) || skip.has("response_format") ? {} : { response_format: "b64_json" }),
+                    // 严格校验的网关会拒收不认识的字段，遇到时由 withImageFieldFallback 剔除后重试
+                    ...(skip.has("output_format") ? {} : { output_format: IMAGE_OUTPUT_FORMAT }),
+                },
+                {
+                    headers: aiHeaders(requestConfig, "application/json"),
+                    signal: options?.signal,
+                    timeout: IMAGE_REQUEST_TIMEOUT_MS,
+                },
+            );
+            return parseImagePayload(response.data);
+        });
         return images;
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("requestFailed")));
@@ -819,35 +958,186 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const quality = normalizeQuality(config.quality);
     const requestSize = resolveRequestSize(quality, config.size);
     const background = normalizeBackground(config.background);
-    const formData = new FormData();
-    formData.set("model", requestConfig.model);
-    formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));
-    formData.set("n", String(n));
-    // gpt-image models reject response_format; they always return b64.
-    if (!/gpt-image/.test(requestConfig.model)) {
-        formData.set("response_format", "b64_json");
-    }
-    formData.set("output_format", IMAGE_OUTPUT_FORMAT);
-    if (quality) {
-        formData.set("quality", quality);
-    }
-    if (requestSize) {
-        formData.set("size", requestSize);
-    }
-    if (background) {
-        formData.set("background", background);
-    }
-    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
+    const promptText = withSystemPrompt(requestConfig, requestPrompt);
+    // File 按次构造并缓存：FormData 一旦发送就不可复用，重试必须重新组装（但不必重新解码图片）。
+    const fileCache = new Map<string, File>();
+    const fileOf = async (image: ReferenceImage) => {
+        const key = `${image.id}:${image.dataUrl.length}`;
+        const cached = fileCache.get(key);
+        if (cached) return cached;
+        const file = dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) });
+        fileCache.set(key, file);
+        return file;
+    };
+    const files = await Promise.all(references.map((image) => fileOf(image)));
     const imageField = files.length > 1 ? "image[]" : "image";
-    files.forEach((file) => formData.append(imageField, file));
 
     try {
-        const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS });
-        const images = await parseImagePayload(response.data);
+        const images = await withImageFieldFallback(async (skip) => {
+            const formData = new FormData();
+            formData.set("model", requestConfig.model);
+            formData.set("prompt", promptText);
+            if (!skip.has("n")) formData.set("n", String(n));
+            // gpt-image models reject response_format; they always return b64.
+            if (!/gpt-image/.test(requestConfig.model) && !skip.has("response_format")) {
+                formData.set("response_format", "b64_json");
+            }
+            // 严格校验的网关会拒收不认识的字段，遇到时由 withImageFieldFallback 剔除后重试
+            if (!skip.has("output_format")) formData.set("output_format", IMAGE_OUTPUT_FORMAT);
+            if (quality && !skip.has("quality")) {
+                formData.set("quality", quality);
+            }
+            if (requestSize && !skip.has("size")) {
+                formData.set("size", requestSize);
+            }
+            if (background && !skip.has("background")) {
+                formData.set("background", background);
+            }
+            files.forEach((file) => formData.append(imageField, file));
+            const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, { headers: aiHeaders(requestConfig), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS });
+            return parseImagePayload(response.data);
+        });
         return images;
     } catch (error) {
+        if (isGenerationCanceled(error)) throw error;
+        // 该渠道没有 /images/edits（图生图端点）：改走 generations 端点把参考图带过去，
+        // 否则用户只会看到一句无解的 404「接口地址不存在」。
+        if (isMissingEndpointError(error) && references.length) {
+            return requestEditViaGenerations(requestConfig, { promptText, references, n, quality, requestSize, background, options });
+        }
         throw new Error(readAxiosError(error, apiText("requestFailed")));
     }
+}
+
+/** 取消（用户中止）不该被当成「端点缺失」而触发重试。 */
+function isGenerationCanceled(error: unknown) {
+    if (axios.isCancel(error)) return true;
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    return /canceled|cancelled|已取消|请求取消|aborted/i.test(message);
+}
+
+/**
+ * 没有 /images/edits 时的图生图回退：同一个 `/images/generations` 端点，参考图按两种形状带上。
+ * 顺序有意为之：顶层 `image` 是更常见的约定（多数网关与官方 SDK 的做法），
+ * `extra_body.image` 是 Agnes 这类「参数需包一层」的渠道写法，放最后作为兜底。
+ */
+async function requestEditViaGenerations(
+    requestConfig: AiConfig,
+    params: {
+        promptText: string;
+        references: ReferenceImage[];
+        n: number;
+        quality: string | undefined;
+        requestSize: string | undefined;
+        background: string | undefined;
+        options?: RequestOptions;
+    },
+) {
+    const { promptText, references, n, quality, requestSize, background, options } = params;
+    const dataUrls = await Promise.all(references.map((image) => imageToDataUrl(image)));
+    const shapes: Array<(body: Record<string, unknown>) => void> = [
+        (body) => {
+            body.image = dataUrls;
+        },
+        (body) => {
+            body.extra_body = { image: dataUrls };
+        },
+    ];
+    let lastError: unknown = null;
+    for (const applyShape of shapes) {
+        try {
+            return await withImageFieldFallback(async (skip) => {
+                const body: Record<string, unknown> = { model: requestConfig.model, prompt: promptText };
+                if (!skip.has("n")) body.n = n;
+                if (quality && !skip.has("quality")) body.quality = quality;
+                if (requestSize && !skip.has("size")) body.size = requestSize;
+                if (background && !skip.has("background")) body.background = background;
+                if (!/gpt-image/.test(requestConfig.model) && !skip.has("response_format")) body.response_format = "b64_json";
+                if (!skip.has("output_format")) body.output_format = IMAGE_OUTPUT_FORMAT;
+                applyShape(body);
+                const response = await axios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/generations"), body, {
+                    headers: aiHeaders(requestConfig, "application/json"),
+                    signal: options?.signal,
+                    timeout: IMAGE_REQUEST_TIMEOUT_MS,
+                });
+                return parseImagePayload(response.data);
+            });
+        } catch (error) {
+            if (isGenerationCanceled(error)) throw error;
+            // 鉴权 / 额度 / 限流这类错误换形状也没意义，直接抛。
+            const status = readErrorStatus(error);
+            if (status === 401 || status === 403 || status === 429) throw error;
+            lastError = error;
+        }
+    }
+    throw new Error(`${apiText("imageEditUnsupported")}（${condenseUpstreamError(readAxiosError(lastError, apiText("requestFailed")))}）`);
+}
+
+/**
+ * 画布会附带一些「OpenAI 之外并非人人都认」的可选字段（output_format / response_format /
+ * quality / background）。不少第三方网关做**严格校验**，遇到不认识的字段直接 400，例如
+ * 「output_format 不是文本图片队列支持的字段」。这类渠道往往只是不接受这个字段，并不缺功能。
+ *
+ * 这里在失败时读出**被点名的那一个字段**并剔除后重试：只动报错里明确指出的字段，
+ * 且只在我们自己确实发过的白名单内，绝不瞎猜、绝不删模型/提示词等必需参数。
+ */
+const OPTIONAL_IMAGE_FIELDS = ["output_format", "response_format", "quality", "background", "size", "n"];
+
+/** 从错误文案里识别「被拒的字段名」；只认白名单内的字段，其余一律返回 null。 */
+export function readRejectedImageField(message: string): string | null {
+    const text = String(message || "");
+    const patterns = [
+        /["'`]?([a-z_]{1,20})["'`]?\s*(?:不是|不属于|未被)\s*[^\n]{0,24}(?:支持|允许|接受)/i,
+        /(?:unknown|unsupported|unrecognized|unexpected|invalid|not\s+supported)\s*(?:field|parameter|argument|key|property)?\s*[:\s]+["'`]?([a-z_]{1,20})/i,
+        /field\s+["'`]?([a-z_]{1,20})["'`]?\s+(?:is\s+)?(?:not\s+supported|unsupported|not\s+allowed|invalid|unknown)/i,
+        // 字段名在前、判定在后的句式，例如「response_format is not supported」
+        /["'`]?([a-z_]{1,20})["'`]?\s+(?:is\s+)?(?:not\s+supported|unsupported|not\s+allowed|not\s+recognized|invalid)\b/i,
+    ];
+    for (const pattern of patterns) {
+        const hit = pattern.exec(text)?.[1]?.toLowerCase();
+        if (hit && OPTIONAL_IMAGE_FIELDS.includes(hit)) return hit;
+    }
+    return null;
+}
+
+/**
+ * 端点缺失判定：不少渠道**只实现 `/images/generations`，不提供 `/images/edits`**
+ * （Agnes 就是这样，图生图要在 generations 里用 extra_body.image 传图）。
+ * 这类渠道做图生图时会直接 404，报错文案形如 `{"detail":"Not Found"}`。
+ *
+ * 命中后我们改走 generations 端点重试，而不是让用户看到一句无解的 404。
+ */
+const MISSING_ENDPOINT = /\b404\b|\b405\b|not\s*found|no\s*such\s*endpoint|unknown\s*(?:endpoint|path|route)|接口(?:地址)?不存在|未找到接口|页面不存在|无此接口/i;
+
+/** 从错误里读出 HTTP 状态码（axios 与我们自己抛的 UpstreamRequestError 都覆盖）。 */
+function readErrorStatus(error: unknown): number | undefined {
+    if (axios.isAxiosError(error)) return error.response?.status;
+    if (error instanceof UpstreamRequestError) return error.status;
+    return undefined;
+}
+
+/** 该错误是否意味着「这个端点不存在」——只有 404/405 与明确的 not found 文案才算。 */
+export function isMissingEndpointError(error: unknown): boolean {
+    if (axios.isCancel(error)) return false;
+    const status = readErrorStatus(error);
+    if (status === 404 || status === 405) return true;
+    if (status !== undefined) return false;
+    return MISSING_ENDPOINT.test(error instanceof Error ? error.message : String(error ?? ""));
+}
+
+/** 最多重试 3 次：每次按报错剔除一个字段；仍失败则把原始错误抛出去。 */
+async function withImageFieldFallback<T>(send: (skip: ReadonlySet<string>) => Promise<T>): Promise<T> {
+    const skip = new Set<string>();
+    for (let attempt = 0; attempt <= OPTIONAL_IMAGE_FIELDS.length; attempt += 1) {
+        try {
+            return await send(skip);
+        } catch (error) {
+            const field = readRejectedImageField(error instanceof Error ? error.message : String(error));
+            if (!field || skip.has(field)) throw error;
+            skip.add(field);
+        }
+    }
+    throw new Error(apiText("requestFailed"));
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: AiTextMessage[], onDelta: (text: string) => void, options?: RequestOptions) {
@@ -876,13 +1166,36 @@ export async function requestImageQuestion(config: AiConfig, messages: AiTextMes
             if (answer === apiText("noContent")) onDelta(answer);
             return answer;
         }
-        const answer = (await requestStreamingResponse(requestConfig, {
-            model: requestConfig.model,
-            input: toResponseInput(withSystemMessage(requestConfig, messages)),
-            ...(requestConfig.reasoningEffort === "auto" ? {} : { reasoning: { effort: requestConfig.reasoningEffort } }),
-        }, onDelta, options)).content || apiText("noContent");
-        if (answer === apiText("noContent")) onDelta(answer);
-        return answer;
+        const input = toResponseInput(withSystemMessage(requestConfig, messages));
+        // 记录是否已经吐出过内容：已经吐字再换通路重试会让流式文本重复错乱，此时宁可报错。
+        let emitted = "";
+        const trackDelta = (text: string) => {
+            if (text) emitted = text;
+            onDelta(text);
+        };
+        let answer = "";
+        try {
+            answer = (
+                await requestStreamingResponse(
+                    requestConfig,
+                    {
+                        model: requestConfig.model,
+                        input,
+                        ...(requestConfig.reasoningEffort === "auto" ? {} : { reasoning: { effort: requestConfig.reasoningEffort } }),
+                    },
+                    trackDelta,
+                    options,
+                )
+            ).content;
+        } catch (error) {
+            // 回退：网关不认 Responses 形状（带图反推最容易踩）时换 chat/completions 再试一次。
+            // 只在「形状/校验类失败」时换，鉴权、额度、限流、服务端错误换形状没有意义。
+            if (emitted || !isUpstreamShapeMismatch(error)) throw error;
+            answer = (await requestChatCompletionStreaming(requestConfig, withSystemMessage(requestConfig, messages), trackDelta, options)).content;
+        }
+        const text = answer || apiText("noContent");
+        if (text === apiText("noContent")) onDelta(text);
+        return text;
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("requestFailed")));
     }
@@ -912,8 +1225,30 @@ export async function fetchImageModels(config: Pick<AiConfig, "baseUrl" | "apiKe
     }
 }
 
-export async function fetchChannelModels(channel: ModelChannel) {
-    return fetchImageModels({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat });
+export async function fetchChannelModels(channel: ModelChannel): Promise<string[]> {
+    const baseUrl = channel.baseUrl.trim().replace(/\/+$/, "");
+    const modelsUrl = `${baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`}/models`;
+    // 先直接打上游。多数合规的 OpenAI 兼容上游会返回 ACAO=*，浏览器能读到 body。
+    try {
+        return await fetchImageModels({ baseUrl, apiKey: channel.apiKey, apiFormat: channel.apiFormat });
+    } catch (primary) {
+        // 常见原因：上游没把 CORS 头补全（常见于 CF Worker、自建网关等），浏览器拿不到 body，
+        // Axios 报 ERR_NETWORK。此时改走本机 Agent 做服务端代理转发，Agent 侧统一加合规的 CORS 头。
+        const msg = primary instanceof Error ? primary.message : "";
+        if (!/ERR_NETWORK|Failed to fetch|network/i.test(msg)) throw primary;
+        const token = useAgentStore.getState().token || "";
+        if (!token) throw primary;
+        const relayUrl = `${window.location.protocol}//${window.location.host}/proxy/models?upstream=${encodeURIComponent(modelsUrl)}`;
+        const resp = await fetch(relayUrl, {
+            headers: { "x-canvas-agent-token": token, "x-proxy-authorization": `Bearer ${channel.apiKey}`, accept: "application/json" },
+            signal: AbortSignal.timeout(15_000),
+        });
+        if (!resp.ok) throw new Error(`${msg}（本机代理返回 ${resp.status}）`);
+        const body = await resp.json().catch(() => null);
+        const items = (body?.data || []) as Array<{ id?: string }>;
+        if (!items.length) throw primary; // 没有 body 内容，把原始错抛出去让前端展示
+        return items.map((item) => item.id).filter((id): id is string => Boolean(id)).sort((a, b) => a.localeCompare(b));
+    }
 }
 
 const defaultGeminiConfig: Pick<AiConfig, "baseUrl" | "apiKey" | "apiFormat" | "model" | "systemPrompt"> = {

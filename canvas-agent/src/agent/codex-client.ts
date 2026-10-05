@@ -8,6 +8,8 @@ import { VERSION } from "../config.js";
 import { logger } from "../utils/logger.js";
 import { field, type JsonRecord } from "../utils/value.js";
 import { codexEventHistory, type CodexEventHistory } from "./codex-event-history.js";
+import { codexToolCompatArgs, codexProviderConfigOverrides } from "./codex-config.js";
+import { ensureUpstreamProxy, upstreamProxyUrl } from "./codex-upstream-proxy.js";
 import type { CodexNotificationParams, CodexPlanUpdate, CodexReasoningEffort, CodexRequestMethod, CodexRequestParams, CodexRequestResult, CodexSkillSelector, CodexTurnInput } from "./codex-protocol.js";
 import type { AgentEmit, AgentPermissionMode } from "./types.js";
 
@@ -28,6 +30,25 @@ const SKILL_DRAFT_INSTRUCTIONS = "你只负责根据已提供的对话或画布�
 /** 表示错误已经通过 app-server 终态或进程事件通知过网页。 */
 export class CodexReportedError extends Error {
     override name = "CodexReportedError";
+}
+
+/**
+ * 把后台进程退出整理成用户可读的说明。
+ *
+ * 两点刻意为之：
+ * 1. 原始退出码只留在运行日志（`agent_log`），对话里出现「3221225477」这种十进制原生码没有任何可操作性；
+ * 2. 文案不写死平台名——本地 Agent 可以由 Codex、DeepSeek Harness、WorkBuddy、Trae 等任意主流工具拉起，
+ *    写死某一个平台会让其它平台的用户误以为接错了工具。
+ */
+export function appServerExitMessage(code: number | null) {
+    if ((code ?? 0) === 0) return "本地 Agent 的后台进程已退出，Agent 已自动重启。请重发上一条消息。";
+    return `本地 Agent 的后台进程异常退出（${exitCodeLabel(code ?? 0)}），Agent 已自动重启。请重发上一条消息；若连续出现，请重启本地 Agent。`;
+}
+
+/** NTSTATUS 级退出码（如 0xC0000005）用十六进制更易检索，普通退出码保留十进制。 */
+function exitCodeLabel(code: number) {
+    if (code > 255 || code < 0) return `0x${(code >>> 0).toString(16).toUpperCase()}`;
+    return String(code);
 }
 
 /** 封装 Codex app-server 的 JSON-RPC 通信与事件转换。 */
@@ -62,14 +83,25 @@ export class CodexAppClient {
     private failing = false;
     private failureMessage = "";
 
-    /** 保存 app-server 子进程和事件出口。 */
-    private constructor(private child: ChildProcess, private emit: AgentEmit, private eventHistory: Pick<CodexEventHistory, "record" | "recordTurn"> = codexEventHistory) {}
+    /**
+     * 保存 app-server 子进程和事件出口。
+     *
+     * `eventHistory` 必须保持第 3 个位置：单测用 `Reflect.construct` 按位置注入假历史，
+     * 新增依赖一律追加到参数列表末尾。
+     */
+    private constructor(private child: ChildProcess, private emit: AgentEmit, private eventHistory: Pick<CodexEventHistory, "record" | "recordTurn"> = codexEventHistory, private proxyBaseUrl?: string) {}
 
     /** 启动并初始化 Codex app-server。 */
     static async start(emit: AgentEmit, onExit: () => void) {
-        logger.info("Starting Codex app-server", { executable: process.execPath, codex: codexBin() });
-        const child = spawn(process.execPath, [codexBin(), "app-server", "--stdio"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
-        const client = new CodexAppClient(child, emit);
+        // 第三方 OpenAI 兼容网关需要工具形态改写，先把回环转发层拉起来
+        const proxyBaseUrl = await ensureUpstreamProxy().catch((error) => {
+            logger.warn("Failed to start upstream tool-compat proxy", { error: error instanceof Error ? error.message : String(error) });
+            return upstreamProxyUrl();
+        });
+        const compatArgs = codexToolCompatArgs();
+        logger.info("Starting Codex app-server", { executable: process.execPath, codex: codexBin(), toolCompat: Boolean(proxyBaseUrl) });
+        const child = spawn(process.execPath, [codexBin(), ...compatArgs, "app-server", "--stdio"], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+        const client = new CodexAppClient(child, emit, codexEventHistory, proxyBaseUrl);
         let stopped = false;
         const stop = () => {
             if (stopped) return;
@@ -95,7 +127,7 @@ export class CodexAppClient {
         child.on("exit", (code) => {
             stderr.flush();
             logger.warn("Codex app-server exited", { code });
-            client.failAll(`Codex app-server exited: ${code ?? 0}`);
+            client.failAll(appServerExitMessage(code));
             stop();
             emit("agent_log", { text: `Codex app-server exited: ${code ?? 0}` });
         });
@@ -109,7 +141,7 @@ export class CodexAppClient {
         if (preheat) this.pendingPreheatThreadStarts += 1;
         let threadId = "";
         try {
-            const { thread } = await this.request("thread/start", { ...threadSettings(permissionMode), ...(cwd ? { cwd } : {}), threadSource: "user" });
+            const { thread } = await this.request("thread/start", { ...threadSettings(permissionMode, this.proxyBaseUrl), ...(cwd ? { cwd } : {}), threadSource: "user" });
             if (!thread.id) throw new Error("Codex app-server 没有返回 thread id");
             threadId = thread.id;
             if (preheat) {
@@ -138,7 +170,7 @@ export class CodexAppClient {
         if (preheat) this.pendingPreheatThreadStarts += 1;
         try {
             if (preheat) this.preheatingThreadIds.add(threadId);
-            const { thread } = await this.request("thread/resume", { threadId, ...threadSettings(permissionMode), ...(cwd ? { cwd } : {}) });
+            const { thread } = await this.request("thread/resume", { threadId, ...threadSettings(permissionMode, this.proxyBaseUrl), ...(cwd ? { cwd } : {}) });
             if (!thread.id) throw new Error("Codex app-server 没有返回 thread id");
             if (preheat) await this.completeMcpPreheat(thread.id);
             return thread;
@@ -783,12 +815,12 @@ function canvasAgentMcpCommand() {
 }
 
 /** 生成 Codex app-server 使用的 MCP 配置。 */
-function codexConfig(permissionMode: AgentPermissionMode) {
-    return { model_reasoning_summary: "auto", ...(permissionMode === "automatic" ? { approvals_reviewer: "auto_review" } : {}), mcp_servers: { "infinite-canvas": { command: canvasAgentMcp.command, args: canvasAgentMcp.args, default_tools_approval_mode: "approve", startup_timeout_sec: 20, tool_timeout_sec: 90 } } };
+function codexConfig(permissionMode: AgentPermissionMode, proxyBaseUrl?: string) {
+    return { model_reasoning_summary: "auto", ...(permissionMode === "automatic" ? { approvals_reviewer: "auto_review" } : {}), ...codexProviderConfigOverrides(proxyBaseUrl), mcp_servers: { "infinite-canvas": { command: canvasAgentMcp.command, args: canvasAgentMcp.args, default_tools_approval_mode: "approve", startup_timeout_sec: 20, tool_timeout_sec: 90 } } };
 }
 
-function threadSettings(permissionMode: AgentPermissionMode) {
-    return { approvalPolicy: permissionMode === "full" ? "never" as const : "on-request" as const, sandbox: permissionMode === "full" ? "danger-full-access" as const : "workspace-write" as const, config: codexConfig(permissionMode) };
+function threadSettings(permissionMode: AgentPermissionMode, proxyBaseUrl?: string) {
+    return { approvalPolicy: permissionMode === "full" ? "never" as const : "on-request" as const, sandbox: permissionMode === "full" ? "danger-full-access" as const : "workspace-write" as const, config: codexConfig(permissionMode, proxyBaseUrl) };
 }
 
 function skillDraftThreadSettings(cwd: string) {

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="utf-8" />
+        <title>发送到无限画布 · 设置</title>
+        <style>
+            body {
+                max-width: 640px;
+                margin: 0 auto;
+                padding: 28px 24px;
+                font: 400 14px/1.7 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+                color: #1f1f1f;
+            }
+            h1 { font-size: 18px; margin: 0 0 4px; }
+            p.sub { color: #6b7280; margin: 0 0 20px; font-size: 13px; }
+            label { display: block; margin-bottom: 6px; font-weight: 500; }
+            input[type="text"] { width: 100%; box-sizing: border-box; height: 34px; padding: 0 10px; border: 1px solid #d1d5db; border-radius: 8px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+            .field { margin-bottom: 16px; }
+            .row { display: flex; gap: 8px; align-items: center; }
+            button { height: 34px; padding: 0 16px; border: none; border-radius: 8px; background: #111827; color: #fff; font-size: 13px; cursor: pointer; }
+            button.ghost { background: #f3f4f6; color: #374151; }
+            .tip { background: #f9fafb; border: 1px solid #eee; border-radius: 10px; padding: 12px 14px; font-size: 12.5px; color: #4b5563; }
+            .tip code { background: #fff; border: 1px solid #e5e7eb; border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+            #status { margin-top: 12px; font-size: 13px; min-height: 20px; }
+        </style>
+    </head>
+    <body>
+        <h1>发送到无限画布</h1>
+        <p class="sub">把网页上的图片、视频一键发送到本机无限画布，作为画布节点。</p>
+
+        <div class="field">
+            <label for="token">Canvas Agent 连接 Token</label>
+            <input id="token" type="text" placeholder="32 位十六进制字符串" autocomplete="off" />
+        </div>
+
+        <div class="field">
+            <label for="baseUrl">本机 Canvas Agent 地址</label>
+            <input id="baseUrl" type="text" placeholder="http://127.0.0.1:17371" />
+        </div>
+
+        <div class="field">
+            <label class="row"><input id="hoverButton" type="checkbox" style="width: auto" /> 鼠标悬停图片 / 视频时显示「发送到画布」按钮</label>
+        </div>
+
+        <div class="field">
+            <label class="row"><input id="localFileSend" type="checkbox" style="width: auto" /> 本机文件通路：<code>Alt</code> + 拖入文件、<code>Alt</code> + <code>V</code> 粘贴截图</label>
+        </div>
+
+        <div class="row">
+            <button id="save">保存</button>
+            <button id="test" class="ghost">测试连接</button>
+        </div>
+        <p id="status"></p>
+
+        <div class="tip">
+            <p><strong>本机图片也能发：</strong>三条路任选——① 点扩展图标，在「本机图片 / 视频」区选择或拖入文件；② 在任意网页 <code>Alt</code> + 拖入本机文件；③ 截图后按 <code>Alt</code> + <code>V</code> 粘贴。</p>
+            <p><strong>装不了扩展的内置浏览器？</strong>用网页版发送台：本机打开 <code>http://127.0.0.1:3000/send</code>（桌面端或本机服务在跑时可用），拖入 / 粘贴 / 填链接都能发，Token 自动获取。</p>
+        </div>
+
+        <div class="tip">
+            <p><strong>Token 在哪拿？</strong>在本机执行下面任一方式：</p>
+            <p>· 运行 <code>node browser-extension/show-agent-token.cjs</code>（仓库自带，直接打印地址与 Token）；</p>
+            <p>· 或打开 <code>C:\Users\&lt;你&gt;\.infinite-canvas\canvas-agent.json</code>，复制 <code>token</code> 字段。</p>
+            <p><strong>用之前要满足两个前提：</strong>① 浏览器里打开着画布页面；② 画布的智能体已连接本机 Canvas Agent（可点画布里的「一键启动 Canvas Agent」）。</p>
+        </div>
+
+        <script src="options.js"></script>
+    </body>
+</html>

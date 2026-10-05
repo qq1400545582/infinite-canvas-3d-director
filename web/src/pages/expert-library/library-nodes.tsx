@@ -4,10 +4,11 @@ import { registerNodeDefinitions, unregisterPluginNodes } from "@/lib/canvas/nod
 import type { CanvasNodeContext, CanvasNodeDefinition } from "@/types/canvas-plugin";
 import { resolveIcon } from "./components/icon-map";
 import { experts } from "./data/experts";
+import { selfMediaSkills } from "./data/self-media";
 import { skills } from "./data/skills";
 import { connectors } from "./data/connectors";
 import { invokeItem } from "./invoke-mode";
-import { connectorToLibraryItem, installToLibraryItem, useUserLibrary, userLibrarySnapshot } from "./state/user-library";
+import { connectorToLibraryItem, installToLibraryItem, normalizeChannelItem, useUserLibrary, userLibrarySnapshot } from "./state/user-library";
 import type { LibraryItem } from "./data/types";
 
 const PLUGIN_ID = "expert-library";
@@ -32,16 +33,35 @@ const KIND_LABEL: Record<LibraryItem["kind"], string> = {
  */
 export function libraryItems(): LibraryItem[] {
     const snapshot = userLibrarySnapshot();
+    // 自媒体目录与技能目录同构，一并注册为画布节点，调用路径完全一致。
+    const catalogSkills = [...skills, ...selfMediaSkills];
     const catalogSkillKeys = new Set<string>();
-    for (const skill of skills) {
+    for (const skill of catalogSkills) {
         catalogSkillKeys.add(skill.id.toLowerCase());
         catalogSkillKeys.add(skill.name.toLowerCase());
     }
+    // 与列表页共用同一份隐藏清单：删掉的条目不能继续作为画布节点暴露。
+    const hiddenExperts = new Set(snapshot.removed.experts);
+    const hiddenSkills = new Set(snapshot.removed.skills);
+    const hiddenConnectors = new Set(snapshot.removed.connectors);
+    // 自定义更新渠道拉来的技能：与列表页同一套归一化与去重规则。
+    const byId = new Map<string, LibraryItem>();
+    for (const item of Object.values(snapshot.channelItems).flat().map(normalizeChannelItem)) byId.set(item.id, item);
+    for (const item of catalogSkills) byId.set(item.id, item);
+    const mergedSkills = [...byId.values()].filter((item) => !hiddenSkills.has(item.id));
     const installedSkills = snapshot.installs
         .filter((record) => !catalogSkillKeys.has(record.name.toLowerCase()))
+        .filter((record) => !hiddenSkills.has(record.name))
         .map(installToLibraryItem);
     const userConnectors = snapshot.connectors.map(connectorToLibraryItem);
-    return [...experts, ...snapshot.experts, ...skills, ...installedSkills, ...connectors, ...userConnectors];
+    return [
+        ...experts.filter((item) => !hiddenExperts.has(item.id)),
+        ...snapshot.experts,
+        ...mergedSkills,
+        ...installedSkills,
+        ...connectors.filter((item) => !hiddenConnectors.has(item.id)),
+        ...userConnectors,
+    ];
 }
 
 function LibraryNodeContent({ ctx, item }: { ctx: CanvasNodeContext; item: LibraryItem }) {

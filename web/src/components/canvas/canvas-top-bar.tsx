@@ -4,7 +4,9 @@ import { Button, Dropdown, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
+import { resolveAgentPlatformLabel } from "@/lib/agent/agent-platform";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { useAgentStore } from "@/stores/use-agent-store";
 import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { DOCS_URL } from "@/constant/env";
@@ -145,13 +147,13 @@ export function CanvasTopBar({
                                     if (event.key === "Enter") onFinishTitleEditing();
                                     if (event.key === "Escape") onCancelTitleEditing();
                                 }}
-                                className="max-w-[280px] bg-transparent p-0 text-left text-lg font-semibold tracking-normal outline-none"
+                                className="max-w-[140px] bg-transparent p-0 text-left text-lg font-semibold tracking-normal outline-none md:max-w-[280px]"
                                 style={{ color: theme.node.text }}
                             />
                         ) : (
                             <button
                                 type="button"
-                                className="max-w-[280px] truncate border-b border-dashed border-transparent text-left text-lg font-semibold tracking-normal transition hover:border-current"
+                                className="max-w-[140px] truncate border-b border-dashed border-transparent text-left text-lg font-semibold tracking-normal transition hover:border-current md:max-w-[280px]"
                                 onDoubleClick={onStartTitleEditing}
                                 title={t("canvas.renameHint")}
                             >
@@ -212,7 +214,10 @@ function CompactAgentStatus({ status, onClick }: { status: { connected: boolean;
     const colorTheme = useThemeStore((state) => state.theme);
     const theme = canvasThemes[colorTheme];
     const { t } = useTranslation();
-    const label = status.connected ? t("canvas.agentConnected") : status.enabled ? t("canvas.agentConnecting", { activity: status.activity || t("canvas.connecting") }) : t("canvas.agentDisconnected");
+    // 平台名跟着「谁打开了画布」走：声明了 source 就显示真实平台，否则用中性称呼，不写死 Codex。
+    const platformSource = useAgentStore((state) => state.platformSource);
+    const platform = resolveAgentPlatformLabel(platformSource, t("agent.platform.generic"));
+    const label = status.connected ? t("canvas.agentConnected", { platform }) : status.enabled ? t("canvas.agentConnecting", { platform, activity: status.activity || t("canvas.connecting") }) : t("canvas.agentDisconnected", { platform });
     const dotColor = status.connected ? "#22c55e" : status.enabled ? "#f59e0b" : theme.node.muted;
     return (
         <button type="button" className="flex h-8 items-center gap-1.5 text-xs transition hover:opacity-75" style={{ color: status.connected ? "#16a34a" : status.enabled ? "#d97706" : theme.node.muted }} onClick={onClick} title={t("canvas.openAgent")}>

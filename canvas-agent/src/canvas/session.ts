@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { ServerResponse } from "node:http";
 
 import type { AgentAttachment } from "../agent/types.js";
+import { runClientMcpSetup } from "../server/client-setup.js";
 import { logger } from "../utils/logger.js";
 import { buildCanvasToolRequest, fitAttachmentNodeSize } from "./operations.js";
 import type { ToolName } from "./schemas.js";
@@ -441,6 +442,8 @@ export class CanvasSession {
         if (!isToolName(name)) throw new Error(`未知工具：${String(name)}`);
         logger.info("MCP tool called", { name, input: rawInput, targetClientId: this.targetClientId });
         const input = parseToolInput(name, rawInput) as Record<string, unknown>;
+        // 本机配置类工具：不依赖画布页面连接，直接在 Agent 进程内执行。
+        if (name === "client_mcp_setup") return await runClientMcpSetup(input as { action?: "status" | "install"; clients?: string[] });
         if (SITE_TOOLS.has(name)) {
             if (!this.clients.size) throw new Error("当前没有已连接网页");
             return await this.requestCanvasTool(name, input);

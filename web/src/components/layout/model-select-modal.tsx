@@ -72,7 +72,12 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
             setActiveTab("new");
             message.success(t("config.modelSelect.fetched", { count: models.length }));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : t("config.modelSelect.fetchFailed"));
+            const detail = error instanceof Error ? error.message : t("config.modelSelect.fetchFailed");
+            // 提示用户在未启用「本地代理」时通过面板开关开启，或改用手动输入模型名。
+            const hint = /ERR_NETWORK|本机代理/i.test(detail)
+                ? `\n\n${t("config.modelSelect.corsFallbackHint")}`
+                : "";
+            message.error(`${detail}${hint}`);
         } finally {
             setLoading(false);
         }

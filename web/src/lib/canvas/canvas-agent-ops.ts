@@ -21,6 +21,7 @@ export type CanvasAgentSnapshot = {
     connections: CanvasConnection[];
     selectedNodeIds: string[];
     viewport: ViewportTransform;
+    nodeTypes?: Array<{ type: string; title: string }>;
 };
 
 export function summarizeCanvasAgentOps(ops?: CanvasAgentOp[]) {

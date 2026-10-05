@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 import { App, Button, Input, Tooltip } from "antd";
 import copyToClipboard from "copy-to-clipboard";
 import { Copy, KeyRound, Link2, PlugZap } from "lucide-react";
@@ -9,6 +9,9 @@ import { isLikelyLocalNetworkAccessBlocked, isLikelyChromium } from "@/lib/agent
 
 const AGENT_PLUGIN_REMOVE_COMMAND = "codex plugin remove infinite-canvas";
 const AGENT_MCP_REMOVE_COMMAND = "codex mcp remove infinite-canvas";
+
+type McpClientStatus = { id: string; label: string; detected: boolean; configured: boolean; upToDate: boolean; configPath: string | null };
+type McpSetupResult = { id: string; label: string; status: "written" | "already" | "skipped" | "failed"; reason?: string; error?: string };
 
 export function AgentConnectView({
     theme,
@@ -54,6 +57,60 @@ export function AgentConnectView({
         copyToClipboard(command);
         message.success(t("agent.connect.commandCopied"));
     };
+
+    // —— 一键接入：让本机 Agent 把 MCP 配置写进各工具（Codex TOML / VS Code servers 键 / Windows cmd /c npx 都由后端处理）——
+    const [mcpClients, setMcpClients] = useState<McpClientStatus[] | null>(null);
+    const [mcpBusyAction, setMcpBusyAction] = useState<"" | "status" | "install">("");
+    const requestMcpSetup = async (action: "status" | "install", clients?: string[]) => {
+        if (!token.trim()) {
+            message.warning(t("agent.connect.mcpNeedAgent"));
+            return null;
+        }
+        const res = await fetch(`${url.trim().replace(/\/$/, "")}/api/tools`, {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-canvas-agent-token": token.trim() },
+            body: JSON.stringify({ name: "client_mcp_setup", input: { action, ...(clients?.length ? { clients } : {}) } }),
+        });
+        const body = (await res.json()) as { ok?: boolean; error?: string; result?: { clients?: McpClientStatus[]; results?: McpSetupResult[] } };
+        if (!body.ok) throw new Error(String(body.error || res.status));
+        return body.result ?? {};
+    };
+    const runMcpStatus = async () => {
+        setMcpBusyAction("status");
+        try {
+            const result = await requestMcpSetup("status");
+            if (result?.clients) setMcpClients(result.clients);
+        } catch (error) {
+            message.error(t("agent.connect.mcpRequestFailed", { error: error instanceof Error ? error.message : String(error) }));
+        } finally {
+            setMcpBusyAction("");
+        }
+    };
+    const runMcpInstall = async (clients?: string[]) => {
+        setMcpBusyAction("install");
+        try {
+            const result = await requestMcpSetup("install", clients);
+            const results = result?.results || [];
+            const failed = results.filter((item) => item.status === "failed");
+            if (failed.length) message.error(t("agent.connect.mcpWriteFailed", { name: failed[0].label, error: failed[0].error || "" }));
+            else {
+                const written = results.filter((item) => item.status === "written").length;
+                const already = results.filter((item) => item.status === "already").length;
+                const skipped = results.filter((item) => item.status === "skipped").length;
+                message.success(t("agent.connect.mcpWriteDone", { written, already, skipped }));
+            }
+            const refreshed = await requestMcpSetup("status");
+            if (refreshed?.clients) setMcpClients(refreshed.clients);
+        } catch (error) {
+            message.error(t("agent.connect.mcpRequestFailed", { error: error instanceof Error ? error.message : String(error) }));
+        } finally {
+            setMcpBusyAction("");
+        }
+    };
+    const mcpState = (client: McpClientStatus) =>
+        client.upToDate ? t("agent.connect.mcpStateOk") : client.configured ? t("agent.connect.mcpStateStale") : client.detected ? t("agent.connect.mcpStatePending") : t("agent.connect.mcpStateMissing");
+    const mcpStateColor = (client: McpClientStatus) => (client.upToDate ? "#16a34a" : client.configured ? "#d97706" : client.detected ? theme.node.muted : theme.node.faint);
+    const mcpPendingCount = mcpClients?.filter((client) => client.detected && !client.upToDate).length ?? 0;
     const codexPluginReminder = (
         <div className="rounded-lg border px-3 py-2.5 text-xs leading-5" style={{ borderColor: theme.node.stroke, color: theme.node.muted }}>
             <div className="font-medium" style={{ color: theme.node.text }}>
@@ -118,6 +175,48 @@ export function AgentConnectView({
                     <div className="mt-1 text-xs leading-5" style={{ color: theme.node.muted }}>
                         {t("agent.connect.interopText")}
                     </div>
+                    <div className="mt-2.5 rounded-md border px-2.5 py-2" style={{ borderColor: theme.node.stroke }}>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="min-w-0">
+                                <div className="text-xs font-medium" style={{ color: theme.node.text }}>
+                                    {t("agent.connect.mcpAutoTitle")}
+                                </div>
+                                <div className="mt-0.5 text-[11px] leading-4" style={{ color: theme.node.muted }}>
+                                    {t("agent.connect.mcpAutoDesc")}
+                                </div>
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                                <Button size="small" loading={mcpBusyAction === "status"} onClick={() => void runMcpStatus()}>
+                                    {t("agent.connect.mcpDetect")}
+                                </Button>
+                                <Button size="small" type="primary" loading={mcpBusyAction === "install"} disabled={!mcpClients || mcpPendingCount === 0} onClick={() => void runMcpInstall()}>
+                                    {t("agent.connect.mcpWriteAll")}
+                                </Button>
+                            </div>
+                        </div>
+                        {mcpClients ? (
+                            <div className="mt-2 grid gap-1">
+                                {mcpClients.map((client) => (
+                                    <div key={client.id} className="flex items-center gap-2 rounded border px-2 py-1" style={{ borderColor: theme.node.stroke }}>
+                                        <span className="shrink-0 text-xs font-medium" style={{ color: theme.node.text }}>
+                                            {client.label}
+                                        </span>
+                                        <span className="min-w-0 flex-1 truncate text-[11px]" style={{ color: mcpStateColor(client) }}>
+                                            {mcpState(client)}
+                                        </span>
+                                        {client.detected && !client.upToDate ? (
+                                            <Button size="small" type="text" className="!h-5 !px-1.5 !text-[11px]" disabled={Boolean(mcpBusyAction)} onClick={() => void runMcpInstall([client.id])}>
+                                                {t("agent.connect.mcpWriteOne")}
+                                            </Button>
+                                        ) : null}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : null}
+                        <div className="mt-1.5 text-[11px] leading-4" style={{ color: theme.node.muted }}>
+                            {t("agent.connect.mcpBackupNote")}
+                        </div>
+                    </div>
                     <div className="mt-2 text-[11px] font-medium" style={{ color: theme.node.muted }}>
                         {t("agent.connect.interopConfig")}
                     </div>
@@ -129,6 +228,14 @@ export function AgentConnectView({
                     </div>
                     <div className="mt-1.5 text-[11px] leading-4" style={{ color: theme.node.muted }}>
                         {t("agent.connect.interopNote")}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] leading-4" style={{ color: theme.node.muted }}>
+                        <a href="/send" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 no-underline hover:underline" style={{ color: "#2563eb" }}>
+                            {t("agent.connect.sendStation")}
+                        </a>
+                        <a href="/send#bookmarklet" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 no-underline hover:underline" style={{ color: "#2563eb" }}>
+                            {t("agent.connect.bookmarkletEntry")}
+                        </a>
                     </div>
                 </div>
                 <div className="rounded-lg border p-3" style={{ borderColor: theme.node.stroke }}>

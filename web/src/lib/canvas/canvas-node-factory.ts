@@ -64,6 +64,11 @@ export function buildAudioGenerationMetadata(config: AiConfig): CanvasNodeMetada
 
 export function applyNodeConfigPatch(node: CanvasNodeData, patch: Partial<CanvasNodeData["metadata"]>) {
     const safePatch = patch || {};
+    // 值全都没变的补丁直接返回**原对象**：让上层的 setNodes 能识别「无变化」并原样返回 prev。
+    // 否则每次「写入相同内容」都会造出新 nodes 数组 → 依赖 nodes 的 memo 全部重算 →
+    // 正在打开的编辑面板 effect 重跑并重建 DOM → 可能触发 input 事件 → 又写回 → 死循环（React #185）。
+    const keys = Object.keys(safePatch) as Array<keyof CanvasNodeData["metadata"]>;
+    if (keys.every((key) => node.metadata?.[key] === safePatch[key])) return node;
     const next = { ...node, metadata: { ...node.metadata, ...safePatch } };
     const spec = node.type === CanvasNodeType.Video ? NODE_DEFAULT_SIZE[CanvasNodeType.Video] : NODE_DEFAULT_SIZE[CanvasNodeType.Image];
     const size = typeof safePatch.size === "string" && !node.metadata?.content ? nodeSizeFromRatio(safePatch.size, spec.width, spec.height) : null;

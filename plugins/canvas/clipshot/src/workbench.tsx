@@ -3,7 +3,7 @@ import type { CanvasNodeContentProps } from "@infinite-canvas/plugin-sdk";
 
 import { PANELS_NODE_TYPE, PANELS_READY_EVENT } from "./ids";
 import { REF_ACTION_CINEMATOGRAPHY, REF_CINEMATIC_LANGUAGE, REF_DELIVERABLE_SCHEMA, REF_VISUAL_PRODUCTION, SKILL_MD } from "./prompts";
-import { DEFAULT_GRID, GRID_PRESETS, buildGridPrefix, buildOutputContract, gridLabel, makeGrid, normalizePanels, type GridSpec, type PanelPrompt } from "./spec";
+import { DEFAULT_GRID, GRID_PRESETS, MAX_GRID_SIDE, MAX_PANELS, MIN_GRID_SIDE, buildGridPrefix, buildOutputContract, gridLabel, makeGrid, normalizePanels, type GridSpec, type PanelPrompt } from "./spec";
 import { MarkdownTables, accentStyles, asText, bodyStyle, errorMessage, extractJson, titleBarStyle, statusTextStyle } from "./shared";
 
 // 分镜工作台（clipshot）
@@ -23,7 +23,21 @@ import { MarkdownTables, accentStyles, asText, bodyStyle, errorMessage, extractJ
 // 模型与密钥由宿主注入（ctx.ai），插件不自带、不读取 API Key。
 
 const RATIOS = ["16:9", "3:4", "9:16"] as const;
-const GRID_SIDES = [1, 2, 3, 4];
+
+// 上传文本的大小上限（剧本是纯文本，200KB 已远超正常剧本规模）
+const UPLOAD_TEXT_MAX_BYTES = 200 * 1024;
+
+/** 收集上游连线节点的文本内容（排除以 content 存放媒体地址的图片/视频等节点）。 */
+function collectUpstreamText(ctx: CanvasNodeContentProps["ctx"]) {
+    return ctx
+        .getUpstream()
+        .map((node) => {
+            const metadata = node.metadata as Record<string, unknown> | undefined;
+            return typeof metadata?.content === "string" ? metadata.content.trim() : "";
+        })
+        .filter((text) => text && !/^(data:|https?:|blob:)/i.test(text))
+        .join("\n\n");
+}
 
 function buildSystemPrompt() {
     return [
@@ -122,6 +136,7 @@ export function WorkbenchContent({ ctx }: CanvasNodeContentProps) {
     const [stream, setStream] = useState("");
     const [loaded, setLoaded] = useState(false);
     const [copiedPanel, setCopiedPanel] = useState(0);
+    const uploadRef = useRef<HTMLInputElement | null>(null);
 
     const ctxRef = useRef(ctx);
     ctxRef.current = ctx;
@@ -172,6 +187,42 @@ export function WorkbenchContent({ ctx }: CanvasNodeContentProps) {
         };
     }, [nodeId]);
 
+    // 上游文本节点自动提取：剧本为空时定期检查上游连线（用户手动输入后不再覆盖）
+    useEffect(() => {
+        if (!loaded) return;
+        const timer = window.setInterval(() => {
+            if (inputsRef.current.script.trim()) return;
+            const text = collectUpstreamText(ctxRef.current);
+            if (text) {
+                persistInputs({ ...inputsRef.current, script: text });
+                setStatus("已自动提取上游文本节点内容");
+            }
+        }, 1500);
+        return () => window.clearInterval(timer);
+    }, [loaded, nodeId]);
+
+    // 上传本地文本文件（.txt / .md 等），内容填入剧本输入框（已有内容时追加）
+    const uploadTextFile = async (file: File | undefined) => {
+        if (!file) return;
+        if (file.size > UPLOAD_TEXT_MAX_BYTES) {
+            setError("文本文件过大（上限 200KB），请拆分后上传。");
+            return;
+        }
+        try {
+            const text = (await file.text()).trim();
+            if (!text) {
+                setError("上传的文件内容为空。");
+                return;
+            }
+            const prev = inputsRef.current.script.trim();
+            persistInputs({ ...inputsRef.current, script: prev ? `${prev}\n\n${text}` : text });
+            setError("");
+            setStatus(prev ? "已把上传文本追加到剧本末尾" : "已读取上传文本到剧本");
+        } catch (err) {
+            setError(`读取文本文件失败：${errorMessage(err)}`);
+        }
+    };
+
     const run = async () => {
         const current = inputsRef.current;
         if (!current.script.trim()) {
@@ -180,6 +231,10 @@ export function WorkbenchContent({ ctx }: CanvasNodeContentProps) {
         }
         if (!current.scope.trim()) {
             setError("请先填写本次覆盖范围（场次 / 时长 / 起止段落）——Skill 要求生成前必须确认范围。");
+            return;
+        }
+        if (Math.round(current.cols) * Math.round(current.rows) > MAX_PANELS) {
+            setError(`分镜格数不能超过 ${MAX_PANELS} 格（当前 ${Math.round(current.cols)}×${Math.round(current.rows)} = ${Math.round(current.cols) * Math.round(current.rows)} 格），请调小列数或行数。`);
             return;
         }
         const grid = makeGrid(current.cols, current.rows);
@@ -333,6 +388,7 @@ export function WorkbenchContent({ ctx }: CanvasNodeContentProps) {
     });
 
     const grid = makeGrid(inputs.cols, inputs.rows);
+    const overLimit = Math.round(inputs.cols) * Math.round(inputs.rows) > MAX_PANELS;
     const activePreset = GRID_PRESETS.find((preset) => preset.cols === grid.cols && preset.rows === grid.rows)?.id || "custom";
     const downstreamPanels = ctx.getDownstream().find((node) => node.type === PANELS_NODE_TYPE);
     const styles = accentStyles(theme);
@@ -373,14 +429,30 @@ export function WorkbenchContent({ ctx }: CanvasNodeContentProps) {
                 style={bodyStyle()}
             >
                 <div>
-                    <span style={labelStyle}>剧本 / 片段 *（必填）</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={labelStyle}>剧本 / 片段 *（必填）</span>
+                        <button type="button" style={chipStyle()} onClick={() => uploadRef.current?.click()}>
+                            上传文本
+                        </button>
+                        <input
+                            ref={uploadRef}
+                            type="file"
+                            accept=".txt,.md,.srt,.fountain,text/plain,text/markdown"
+                            style={{ display: "none" }}
+                            onChange={(event) => {
+                                void uploadTextFile(event.target.files?.[0]);
+                                event.target.value = "";
+                            }}
+                        />
+                    </div>
                     <textarea
                         value={inputs.script}
                         onChange={(event) => persistInputs({ ...inputsRef.current, script: event.target.value })}
-                        placeholder="粘贴剧本正文或本次要处理的明确片段…"
+                        placeholder="粘贴剧本正文或本次要处理的明确片段，也可点「上传文本」导入本地 .txt / .md 文件…"
                         rows={5}
                         style={{ ...fieldStyle, resize: "vertical", minHeight: 72, lineHeight: 1.6 }}
                     />
+                    <div style={{ fontSize: 11, color: theme.node.muted, marginTop: 2 }}>连接上游文本节点后，剧本为空时会自动提取上游文本内容；手动输入后不再覆盖。</div>
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "150px 1fr", gap: 10 }}>
@@ -421,33 +493,32 @@ export function WorkbenchContent({ ctx }: CanvasNodeContentProps) {
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
                         <span style={{ fontSize: 11, color: theme.node.muted }}>自定义</span>
-                        <select
-                            value={grid.cols}
-                            onChange={(event) => persistInputs({ ...inputsRef.current, cols: Number(event.target.value) })}
+                        <input
+                            type="number"
+                            min={MIN_GRID_SIDE}
+                            max={MAX_GRID_SIDE}
+                            value={inputs.cols}
+                            onChange={(event) => persistInputs({ ...inputsRef.current, cols: Math.round(Number(event.target.value)) || MIN_GRID_SIDE })}
                             style={{ ...fieldStyle, width: 66 }}
-                        >
-                            {GRID_SIDES.map((side) => (
-                                <option key={side} value={side}>
-                                    {side} 列
-                                </option>
-                            ))}
-                        </select>
+                        />
                         <span style={{ fontSize: 11, color: theme.node.muted }}>×</span>
-                        <select
-                            value={grid.rows}
-                            onChange={(event) => persistInputs({ ...inputsRef.current, rows: Number(event.target.value) })}
+                        <input
+                            type="number"
+                            min={MIN_GRID_SIDE}
+                            max={MAX_GRID_SIDE}
+                            value={inputs.rows}
+                            onChange={(event) => persistInputs({ ...inputsRef.current, rows: Math.round(Number(event.target.value)) || MIN_GRID_SIDE })}
                             style={{ ...fieldStyle, width: 66 }}
-                        >
-                            {GRID_SIDES.map((side) => (
-                                <option key={side} value={side}>
-                                    {side} 行
-                                </option>
-                            ))}
-                        </select>
+                        />
                         <span style={{ fontSize: 11.5, color: theme.node.muted }}>
-                            共 <strong style={{ color: theme.node.text }}>{grid.count}</strong> 格 · 单格 {inputs.ratio}
+                            行 · 共 <strong style={{ color: theme.node.text }}>{grid.count}</strong> 格 · 单格 {inputs.ratio}
                         </span>
                     </div>
+                    {overLimit ? (
+                        <div style={{ fontSize: 11, lineHeight: 1.6, color: "#f87171", marginTop: 4 }}>
+                            列 × 行 不能超过 {MAX_PANELS} 格（当前 {Math.round(inputs.cols)}×{Math.round(inputs.rows)}），请调小后再生成。
+                        </div>
+                    ) : null}
                 </div>
 
                 <details>
@@ -473,7 +544,7 @@ export function WorkbenchContent({ ctx }: CanvasNodeContentProps) {
                 </details>
 
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <button type="button" onClick={() => void run()} disabled={busy} style={buttonStyle(true, busy)}>
+                    <button type="button" onClick={() => void run()} disabled={busy || overLimit} style={buttonStyle(true, busy)}>
                         {busy ? "生成中…" : "生成分镜"}
                     </button>
                     {busy ? (

@@ -238,7 +238,9 @@ export function parseRemoteSource(input: string): RemoteSkillSource | { error: R
 
     if (host === "github.com" || host === "www.github.com") {
         if (segments.length < 2) return { error: "invalidUrl" };
-        const [owner, repo] = segments;
+        const [owner, rawRepo] = segments;
+        // 用户常粘贴 .git 结尾的克隆地址，剥离后缀才能命中 GitHub API
+        const repo = rawRepo.replace(/\.git$/i, "");
         const rest = segments.slice(2);
         const marker = rest[0]?.toLowerCase();
         if (marker === "tree" || marker === "blob") {
@@ -254,7 +256,8 @@ export function parseRemoteSource(input: string): RemoteSkillSource | { error: R
 
     if (host === "gitee.com" || host === "www.gitee.com") {
         if (segments.length < 2) return { error: "invalidUrl" };
-        const [owner, repo] = segments;
+        const [owner, rawRepo] = segments;
+        const repo = rawRepo.replace(/\.git$/i, "");
         const rest = segments.slice(2);
         const marker = rest[0]?.toLowerCase();
         if (marker === "tree" || marker === "blob" || marker === "raw") {
@@ -272,16 +275,56 @@ export function parseRemoteSource(input: string): RemoteSkillSource | { error: R
     return { kind: "raw", url: url.toString(), label: host };
 }
 
-async function fetchText(url: string) {
-    const response = await fetch(url, { headers: { accept: "text/plain,*/*" } });
-    if (!response.ok) throw new Error(String(response.status));
+/** HTTP 状态错误（区别于网络层失败，用于把 404 映射为「未找到」）。 */
+class HttpError extends Error {
+    readonly status: number;
+    constructor(status: number) {
+        super(String(status));
+        this.status = status;
+    }
+}
+
+const REMOTE_TIMEOUT_MS = 15_000;
+
+/** 带超时与一次重试的 fetch（本机到 github 的链路间歇性抖动，重试可显著提高成功率）。 */
+async function fetchWithRetry(url: string, init?: RequestInit): Promise<Response> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            const response = await fetch(url, { ...init, signal: AbortSignal.timeout(REMOTE_TIMEOUT_MS) });
+            if (!response.ok) throw new HttpError(response.status);
+            return response;
+        } catch (error) {
+            // HTTP 状态错误（404 等）重试无意义，直接抛出
+            if (error instanceof HttpError) throw error;
+            lastError = error;
+        }
+    }
+    throw lastError instanceof Error ? lastError : new Error("network");
+}
+
+async function fetchText(url: string, headers?: Record<string, string>) {
+    const response = await fetchWithRetry(url, { headers: { accept: "text/plain,*/*", ...(headers || {}) } });
     return await response.text();
 }
 
 async function fetchBlob(url: string) {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(String(response.status));
+    const response = await fetchWithRetry(url);
     return await response.blob();
+}
+
+/** 把 raw.githubusercontent.com 直链换算成 GitHub contents API 等价地址（raw 域名在本机常不可达）。 */
+function githubRawFallbackUrl(url: string): string | null {
+    const match = /^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/i.exec(url);
+    if (!match) return null;
+    const [, owner, repo, ref, path] = match;
+    let decoded: string;
+    try {
+        decoded = decodeURIComponent(path);
+    } catch {
+        decoded = path;
+    }
+    return `https://api.github.com/repos/${owner}/${repo}/contents/${encodePath(decoded)}?ref=${encodeURIComponent(ref)}`;
 }
 
 /** 抓取并解析远程来源中的技能。 */
@@ -295,7 +338,15 @@ export async function fetchRemoteSkills(source: RemoteSkillSource): Promise<{ sk
                 const outcome = await extractSkills(entries, label);
                 return outcome.skills.length ? { skills: outcome.skills } : { error: "noSkills" };
             }
-            const text = await fetchText(source.url);
+            let text: string;
+            try {
+                text = await fetchText(source.url);
+            } catch (error) {
+                // raw.githubusercontent.com 不可达时回退 GitHub contents API 取原文
+                const fallback = githubRawFallbackUrl(source.url);
+                if (!fallback) throw error;
+                text = await fetchText(fallback, { accept: "application/vnd.github.raw" });
+            }
             if (/^\s*PK\u0003\u0004/.test(text)) return { error: "noSkills" };
             const result = parseSkillMarkdown(text, label, source.url);
             return result.ok ? { skills: [result.skill] } : { error: "noSkills" };
@@ -303,12 +354,28 @@ export async function fetchRemoteSkills(source: RemoteSkillSource): Promise<{ sk
         const listed = source.kind === "github" ? await listGithubSkills(source) : await listGiteeSkills(source);
         if ("error" in listed) return listed;
         return { skills: listed.skills };
-    } catch {
+    } catch (error) {
+        if (error instanceof HttpError && error.status === 404) return { error: "notFound" };
         return { error: "network" };
     }
 }
 
 type RemoteListing = { skills: ParsedSkill[] } | { error: RemoteErrorCode };
+
+/**
+ * 拉取仓库内单个文本文件：优先 raw.githubusercontent.com，失败（含域名不可达）
+ * 时回退 GitHub contents API（api.github.com 可达且允许跨域）直接返回原文。
+ */
+async function fetchGithubFileText(source: Extract<RemoteSkillSource, { kind: "github" }>, branch: string, path: string): Promise<string> {
+    try {
+        return await fetchText(`https://raw.githubusercontent.com/${source.owner}/${source.repo}/${encodeURIComponent(branch)}/${encodePath(path)}`);
+    } catch {
+        return await fetchText(
+            `https://api.github.com/repos/${source.owner}/${source.repo}/contents/${encodePath(path)}?ref=${encodeURIComponent(branch)}`,
+            { accept: "application/vnd.github.raw" },
+        );
+    }
+}
 
 async function listGithubSkills(source: Extract<RemoteSkillSource, { kind: "github" }>): Promise<RemoteListing> {
     const repo = await fetchJson(`https://api.github.com/repos/${source.owner}/${source.repo}`);
@@ -320,7 +387,7 @@ async function listGithubSkills(source: Extract<RemoteSkillSource, { kind: "gith
     if (!targets.length) return { error: "noSkills" };
     const skills: ParsedSkill[] = [];
     for (const path of targets) {
-        const raw = await fetchText(`https://raw.githubusercontent.com/${source.owner}/${source.repo}/${encodeURIComponent(branch)}/${encodePath(path)}`);
+        const raw = await fetchGithubFileText(source, branch, path);
         const result = parseSkillMarkdown(raw, baseName(path), `github.com/${source.owner}/${source.repo}`);
         if (result.ok) skills.push(result.skill);
     }
@@ -345,8 +412,7 @@ async function listGiteeSkills(source: Extract<RemoteSkillSource, { kind: "gitee
 }
 
 async function fetchJson(url: string) {
-    const response = await fetch(url, { headers: { accept: "application/json" } });
-    if (!response.ok) throw new Error(String(response.status));
+    const response = await fetchWithRetry(url, { headers: { accept: "application/json" } });
     return (await response.json()) as unknown;
 }
 

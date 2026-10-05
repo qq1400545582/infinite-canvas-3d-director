@@ -6,7 +6,8 @@ import { Bot, History, MessageSquare, PanelRightClose, PlugZap, Plus, Sparkles, 
 import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
-import { readAgentUrlBootstrap } from "@/lib/agent/agent-url-bootstrap";
+import { storePlatformSource } from "@/lib/agent/agent-platform";
+import { readAgentPlatformSource, readAgentUrlBootstrap } from "@/lib/agent/agent-url-bootstrap";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
 import { imageMetadata } from "@/lib/canvas/canvas-node-factory";
@@ -75,6 +76,33 @@ const DEFAULT_AGENT_URL = "http://127.0.0.1:17371";
 const AGENT_PROTOCOL_VERSION = 6;
 const HISTORY_RETRY_DELAYS_MS = [0, 150, 350, 700, 1200];
 const AGENT_REASONING_EFFORTS = new Set<AgentReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
+/** 「对话初始化失败」在服务端是终态（不会自行重试）：连接时主动恢复，最多尝试次数与间隔。 */
+const CONVERSATION_RECOVERY_ATTEMPTS = 2;
+const CONVERSATION_RECOVERY_DELAY_MS = 2500;
+/**
+ * 供应商侧「没有这个模型」的报错特征。
+ *
+ * Codex 的模型目录永远是它内置的 OpenAI 目录（默认 gpt-5.6-sol），与本机 `~/.codex/config.toml`
+ * 里真正配置的供应商无关。第三方 OpenAI 兼容供应商（如 api.agnes-ai.cn）收到目录里的模型名时会
+ * 返回 `503 分组 default 下模型 xxx 无可用渠道`，这类报错对用户毫无指向性 —— 命中后追加可操作提示。
+ */
+const PROVIDER_MODEL_ERROR_PATTERN = /无可用渠道|无可用模型|模型不存在|不支持的模型|未知的模型|model[_ ]?not[_ ]?found|unknown model|unsupported model|invalid model|does not exist|no available channel/i;
+/**
+ * 供应商侧「余额 / 额度不足」的报错特征（如 agnes-ai 的 403「预扣费失败」）。
+ *
+ * 与模型名无关，纯属账户余额问题 —— 只追加可操作提示，**不要**触发换线程（换线程解决不了余额）。
+ */
+const PROVIDER_BALANCE_ERROR_PATTERN = /预扣费失败|余额不足|额度不足|账户余额|insufficient\s+(balance|quota|credit)|exceeded your current quota|quota exceeded/i;
+/**
+ * 会话恢复选项。
+ *
+ * `preferNewThread` 用于「当前线程已经被写死了供应商不支持的模型」：Codex 会把带过的 model 写进
+ * 线程设置（rollout 里的 `thread_settings_applied`），`thread/resume` 只会把那个坏设置原样带回，
+ * 所以只能新建线程 —— 新线程由 Agent 侧 `thread/start` 建立，模型取 `~/.codex/config.toml`。
+ */
+type ConversationRecoveryOptions = { preferNewThread?: boolean };
+/** 「模型不可用」触发的强制新建：同一线程只做一次，且每次会话最多做几次，避免供应商真没配好时刷线程。 */
+const MODEL_RESET_ATTEMPTS = 3;
 const rt = (key: string, options?: Record<string, unknown>) => i18n.t(`agent.runtime.${key}`, options);
 /** 「连接」文案在 agent.connect 命名空间下（rt 只对应 agent.runtime，别混用，否则会渲染出原始 key）。 */
 const ct = (key: string, options?: Record<string, unknown>) => i18n.t(`agent.connect.${key}`, options);
@@ -207,6 +235,8 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         })),
     );
     const setAgentState = useAgentStore((state) => state.setAgentState);
+    // 「一键启动后端 / 平台 fragment 引导」路径的标记：连接中若超时未收到 hello，据此自动重建连接。
+    const silentConnect = useAgentStore((state) => state.silentConnect);
     const conversationReady = conversation.status === "ready" || conversation.status === "warning";
     const conversationBusy = conversation.status === "preparing" || conversation.status === "running";
     const closePanel = useAgentStore((state) => state.closePanel);
@@ -227,6 +257,12 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     const clientIdRef = useRef("");
     const [clientReady, setClientReady] = useState(false);
     const [backendStarting, setBackendStarting] = useState(false);
+    /** 会话恢复：发起中的重入锁 + 供「状态变为 failed」的兜底 effect 取用。 */
+    const recoveringRef = useRef(false);
+    const recoverConversationRef = useRef<((reason: string, threadId: string, options?: ConversationRecoveryOptions) => Promise<void>) | null>(null);
+    /** 因「供应商没有这个模型」已经强制新建过线程的 threadId：同一线程只处理一次，避免反复新建。 */
+    const modelResetThreadRef = useRef("");
+    const modelResetCountRef = useRef(0);
     const loadThreadsSequenceRef = useRef(0);
     const threadMessagesRef = useRef(new Map<string, AgentChatItem[]>());
     const authoritativeHistoryTurnsRef = useRef(new Set<string>());
@@ -398,6 +434,92 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                 if (isCurrentConnection()) addEventLog(rt("conversationSyncFailed"), error);
             });
         };
+        /**
+         * 恢复处于 failed 终态的对话。
+         *
+         * 服务端只在「创建线程 / 恢复线程」失败时写一次 failed 就再也不动它，而输入框要求会话处于
+         * ready/warning —— 于是面板会永久停在「既不能输入、也不能发送」，重启页面也没用（重启本地
+         * Agent 才行）。这里在连接时主动新建一个会话恢复可用：失败的会话本身已无可信状态，新建是
+         * 唯一能保证可发送的做法，原会话仍完整保留在「历史」里可随时恢复。
+         * 新建的线程由 Agent 侧 `thread/start` 建立，不显式带 model ⇒ 模型取本机 Codex 配置
+         * （`~/.codex/config.toml`，即渠道「同步到 Codex」写入的供应商模型）。
+         *
+         * 另一条调用路径是 `preferNewThread`：供应商返回「无可用模型 / 无可用渠道」时失败的是 turn
+         * 而非会话（会话往往仍是 ready），同样只能靠新建线程恢复，且必须跳过 resume。
+         */
+        const tryRecoverConversation = async (reason: string, threadId: string, options?: ConversationRecoveryOptions) => {
+            /**
+             * 默认只在会话处于 failed 终态时动作；`preferNewThread` 来自供应商模型类报错，那种情况下
+             * 失败的是 turn 而不是会话（会话多半仍是 ready），failed 判断不适用 —— 改为只处理一次。
+             */
+            const needsRecovery = () => isCurrentConnection() && (Boolean(options?.preferNewThread) || useAgentStore.getState().conversation.status === "failed");
+            const attempts = options?.preferNewThread ? 1 : CONVERSATION_RECOVERY_ATTEMPTS;
+            for (let attempt = 0; attempt < attempts; attempt += 1) {
+                if (!needsRecovery()) return;
+                if (attempt) await delay(CONVERSATION_RECOVERY_DELAY_MS);
+                if (!needsRecovery()) return;
+                addEventLog(rt("conversationAutoRecovering"), reason || rt("conversationCreateFailed"));
+                try {
+                    // 原线程仍可用时优先恢复它（保留当前对话）；只有它真的回不来才新建。
+                    // `preferNewThread` 时原线程必然带着坏掉的模型设置，跳过 resume 直接新建。
+                    const target = options?.preferNewThread ? "" : threadId || useAgentStore.getState().activeThreadId;
+                    if (target) {
+                        try {
+                            const resumed = await fetchAgentJson<AgentThreadResponse>(endpoint, token, `/agent/codex/threads/${encodeURIComponent(target)}/resume`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ clientId, permissionMode: useAgentStore.getState().permissionMode }) });
+                            if (!isCurrentConnection()) return;
+                            if (resumed.conversation) applyConversationState(resumed.conversation, true);
+                            if (useAgentStore.getState().conversation.status !== "failed") {
+                                addEventLog(rt("conversationAutoRecovered"), target);
+                                await loadThreads();
+                                return;
+                            }
+                        } catch (error) {
+                            if (!isCurrentConnection()) return;
+                            const failed = agentErrorState(error);
+                            if (failed) applyConversationState(failed, true);
+                        }
+                    }
+                    const created = await fetchAgentJson<AgentWorkspaceResponse>(endpoint, token, "/agent/codex/threads/reset", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ clientId, permissionMode: useAgentStore.getState().permissionMode }) });
+                    if (!isCurrentConnection()) return;
+                    if (created.conversation) applyConversationState(created.conversation, true);
+                    if (useAgentStore.getState().conversation.status !== "failed") {
+                        addEventLog(rt("conversationAutoRecovered"), created.conversation?.conversationId || rt("newConversation"));
+                        await loadThreads();
+                        return;
+                    }
+                } catch (error) {
+                    const state = agentErrorState(error);
+                    if (state) applyConversationState(state, true);
+                }
+            }
+            if (useAgentStore.getState().conversation.status === "failed") {
+                const detail = useAgentStore.getState().conversation.error || rt("conversationCreateFailed");
+                addEventLog(rt("conversationAutoRecoverFailed"), detail);
+                if (!headless) message.error(`${rt("conversationAutoRecoverFailed")}：${detail}`);
+            } else if (options?.preferNewThread) {
+                // 新建没成功但会话仍可用：模型问题没解决，留一条日志便于排查（不再弹提示，避免打扰）。
+                addEventLog(rt("conversationAutoRecoverFailed"), useAgentStore.getState().conversation.error || reason);
+            }
+        };
+        // hello 事件与「会话状态变为 failed」两处都会触发恢复；加锁避免并发各建一次会话。
+        const recoverConversation = async (reason: string, threadId: string, options?: ConversationRecoveryOptions) => {
+            if (recoveringRef.current || !isCurrentConnection()) return;
+            if (options?.preferNewThread) {
+                const target = threadId || useAgentStore.getState().activeThreadId;
+                if (!target || modelResetThreadRef.current === target || modelResetCountRef.current >= MODEL_RESET_ATTEMPTS) return;
+                modelResetThreadRef.current = target;
+                modelResetCountRef.current += 1;
+            }
+            recoveringRef.current = true;
+            try {
+                await tryRecoverConversation(reason, threadId, options);
+            } finally {
+                recoveringRef.current = false;
+                // 新建成功就清掉标记：用户之后主动切回那条坏线程时，仍应能再自愈一次（而不是永久失效）。
+                if (options?.preferNewThread && useAgentStore.getState().conversation.status !== "failed") modelResetThreadRef.current = "";
+            }
+        };
+        recoverConversationRef.current = recoverConversation;
         const source = new EventSource(`${endpoint}/events?token=${encodeURIComponent(token)}&clientId=${encodeURIComponent(clientId)}`);
         source.addEventListener("hello", (event) => {
             if (!isCurrentConnection()) return;
@@ -452,6 +574,9 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                         if (state) applyConversationState(state);
                         addEventLog(rt("conversationInitFailed"), error);
                     });
+            }
+            if (!busy && hello?.conversation?.status === "failed") {
+                void recoverConversation(hello.conversation.error || "", hello.conversation.threadId || nextThreadId);
             }
         });
         source.addEventListener("codex_state", (event) => {
@@ -618,10 +743,37 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             disposed = true;
             source.close();
             connectedRef.current = false;
+            recoverConversationRef.current = null;
             loadThreadsSequenceRef.current += 1;
             useAgentSkillStore.getState().reset();
         };
     }, [applyConversationState, applyWorkspaceChange, clientReady, enabled, endpoint, loadSkills, loadThreads, message, setAgentState, token]);
+
+    // 一键启动兜底：launcher 已确认 url+token 并进入「连接中」后，hello 正常应在 1-2 秒内到达。
+    // 若 6 秒仍停留在连接中（EventSource 挂起 / hello 丢失等浏览器侧时序问题，此时 onerror 也
+    // 未触发，页面会永久卡住），自动断开并重建一次连接 —— 与用户手动点「网页连接」等效。
+    // 只在 silentConnect（一键启动 / 平台 fragment 引导）时生效，手动「网页连接」不受影响；
+    // 重建不再置 silentConnect ⇒ 最多自动重试一次，仍失败则如实落到「未连接」，不会死循环。
+    useEffect(() => {
+        if (!enabled || connected || !silentConnect) return;
+        const timer = window.setTimeout(() => {
+            const state = useAgentStore.getState();
+            if (state.connected || !state.enabled || !state.silentConnect) return;
+            // zustand 同值 set 不会触发 SSE effect 重跑，必须先置 false（触发旧连接清理），
+            // 下一轮任务再置回 true（建立全新连接）。
+            setAgentState({ enabled: false, connected: false, silentConnect: false, fragmentBootstrap: false });
+            window.setTimeout(() => {
+                setAgentState({ url: state.url, token: state.token, enabled: true, connected: false, silentConnect: false, fragmentBootstrap: false, activity: rt("connecting"), connectError: "", activeTab: "setup" });
+            }, 0);
+        }, 6000);
+        return () => window.clearTimeout(timer);
+    }, [connected, enabled, setAgentState, silentConnect]);
+
+    useEffect(() => {
+        if (!connected || conversation.status !== "failed") return;
+        // 会话进入 failed 终态后输入框会永久禁用（服务端不会自愈）：这里兜底恢复，覆盖 hello 之外的状态变化。
+        void recoverConversationRef.current?.(conversation.error || "", conversation.threadId || "");
+    }, [connected, conversation.error, conversation.status, conversation.threadId]);
 
     useEffect(() => {
         if (connected) void loadThreads();
@@ -645,13 +797,22 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             });
             if (!models.length) return;
             const savedModel = useAgentStore.getState().model;
-            const current = models.find((item) => item.model === savedModel) || models.find((item) => item.isDefault) || models[0];
             const savedEffort = useAgentStore.getState().reasoningEffort;
+            // `model/list` 返回的是 Codex **内置的 OpenAI 目录**，与本机 config.toml 里的实际供应商无关；
+            // 而 `turn/start` 一旦带上 model 就会被该线程记住（之后不带也沿用），等于把渠道「同步到 Codex」
+            // 写入的供应商模型永久覆盖掉。所以只有用户亲手选过目录模型时才回填，否则留空（= 自动，交给 Codex）。
+            const catalogDefault = models.find((item) => item.isDefault) || models[0];
+            const savedEntry = savedModel && savedModel !== catalogDefault.model ? models.find((item) => item.model === savedModel) : undefined;
+            const current = savedEntry || catalogDefault;
             const efforts = current.supportedReasoningEfforts.map((item) => item.reasoningEffort);
-            const nextEffort = efforts.includes(savedEffort as AgentReasoningEffort) ? savedEffort as AgentReasoningEffort : current.defaultReasoningEffort || efforts[0];
-            localStorage.setItem("canvas-agent-model", current.model);
-            localStorage.setItem("canvas-agent-reasoning-effort", nextEffort);
-            setAgentState({ models, model: current.model, reasoningEffort: nextEffort });
+            const defaultEffort = current.defaultReasoningEffort || efforts[0];
+            // 思考程度同理：只有用户显式选过（且与该模型的目录默认值不同）才上报，避免用它覆盖供应商配置。
+            const savedEffortEntry = savedEntry && savedEffort && savedEffort !== defaultEffort && efforts.includes(savedEffort as AgentReasoningEffort)
+                ? savedEffort as AgentReasoningEffort
+                : "";
+            localStorage.setItem("canvas-agent-model", savedEntry ? current.model : "");
+            localStorage.setItem("canvas-agent-reasoning-effort", savedEffortEntry);
+            setAgentState({ models, model: savedEntry ? current.model : "", reasoningEffort: savedEffortEntry });
         }).catch((error) => addEventLog(rt("modelListFailed"), error));
     }, [connected, endpoint, setAgentState, token]);
 
@@ -1048,6 +1209,13 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     }, [backendStarting, rt, setAgentState, toggleAgentConnection]);
 
     useLayoutEffect(() => {
+        // 平台可以在 fragment 里用 `source=` 自报家门（Codex / DSH / WorkBuddy / Trae…），
+        // 画布据此显示真实平台名；没声明就保持中性称呼，不臆测。
+        const declaredSource = readAgentPlatformSource(hash);
+        if (declaredSource && declaredSource !== useAgentStore.getState().platformSource) {
+            storePlatformSource(declaredSource);
+            setAgentState({ platformSource: declaredSource });
+        }
         const bootstrap = readAgentUrlBootstrap(hash);
         if (!bootstrap) return;
         navigate(`${window.location.pathname}${window.location.search}${bootstrap.remainingHash}`, { replace: true });
@@ -1294,15 +1462,23 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
 
     const showAgentError = (value: unknown, event?: AgentEventPayload, log = true) => {
         const error = agentErrorView(value);
+        // 供应商报错对用户没有指向性，按特征追加一条可操作指引（模型目录错 / 账户余额不足）。
+        const hint = PROVIDER_MODEL_ERROR_PATTERN.test(error.text) ? rt("codexModelMissingHint") : PROVIDER_BALANCE_ERROR_PATTERN.test(error.text) ? rt("codexBalanceHint") : "";
+        const text = hint ? `${error.text}\n\n${hint}` : error.text;
         const item = event
-            ? scopeEventChatItem(event, { id: "synthetic:error", role: "error", title: error.title, text: error.text }, "synthetic:error")
-            : scopeChatItem({ id: createId(), role: "error", title: error.title, text: error.text }, useAgentStore.getState().activeThreadId, useAgentStore.getState().activeTurnId);
+            ? scopeEventChatItem(event, { id: "synthetic:error", role: "error", title: error.title, text }, "synthetic:error")
+            : scopeChatItem({ id: createId(), role: "error", title: error.title, text }, useAgentStore.getState().activeThreadId, useAgentStore.getState().activeTurnId);
         const state = useAgentStore.getState();
         const current = state.messages.find((message) => message.id === item.id);
         if (current && !normalizeText(value)) return;
         upsertActivityMessage(item);
         setAgentState({ activity: rt("processingFailed"), pendingApprovals: [] });
-        if (log) addEventLog(rt("processingFailed"), error.text, value);
+        if (log) addEventLog(rt("processingFailed"), text, value);
+        // 供应商报「没有这个模型」几乎只有一种成因：当前线程早前被写死了 Codex 内置目录模型
+        // （rollout 的 thread_settings_applied），此后不带 model 的 turn 也沿用，线程无法救活 —— 直接新建。
+        if (PROVIDER_MODEL_ERROR_PATTERN.test(error.text)) {
+            void recoverConversationRef.current?.(error.text, useAgentStore.getState().activeThreadId, { preferNewThread: true });
+        }
     };
 
     const handleAgentEvent = async (event: AgentEventPayload) => {
@@ -1527,17 +1703,17 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
                         models={models}
                         model={model}
                         reasoningEffort={reasoningEffort}
-                        onModelChange={(model) => {
-                            const selected = models.find((item) => item.model === model);
-                            if (!selected) return;
-                            const effort = selected.defaultReasoningEffort || selected.supportedReasoningEfforts[0]?.reasoningEffort;
-                            localStorage.setItem("canvas-agent-model", model);
-                            if (effort) localStorage.setItem("canvas-agent-reasoning-effort", effort);
-                            setAgentState({ model, ...(effort ? { reasoningEffort: effort } : {}) });
+                        onModelChange={(next) => {
+                            // 空串 = 「自动」（跟随 Codex 配置）；选中目录模型才算显式指定，并顺手带上它的默认思考程度。
+                            const selected = models.find((item) => item.model === next);
+                            const effort = selected?.defaultReasoningEffort || selected?.supportedReasoningEfforts[0]?.reasoningEffort || "";
+                            localStorage.setItem("canvas-agent-model", next);
+                            localStorage.setItem("canvas-agent-reasoning-effort", effort);
+                            setAgentState({ model: next, reasoningEffort: effort });
                         }}
-                        onReasoningEffortChange={(reasoningEffort) => {
-                            localStorage.setItem("canvas-agent-reasoning-effort", reasoningEffort);
-                            setAgentState({ reasoningEffort });
+                        onReasoningEffortChange={(next) => {
+                            localStorage.setItem("canvas-agent-reasoning-effort", next);
+                            setAgentState({ reasoningEffort: next });
                         }}
                         left={
                             attachments.length ? (

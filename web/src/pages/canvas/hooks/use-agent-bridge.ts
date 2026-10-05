@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type MutableR
 import i18n from "@/i18n";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
+import { listNodeDefinitions, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import type { CanvasConnection, CanvasNodeData, ContextMenuState, ViewportTransform } from "@/types/canvas";
 
@@ -36,10 +37,11 @@ export function useAgentBridge(params: AgentBridgeParams) {
     const { projectId, title, nodes, connections, selectedNodeIds, viewport, nodesRef, connectionsRef, selectedNodeIdsRef, viewportRef, generateNodeRef, setNodes, setConnections, setSelectedNodeIds, setSelectedConnectionId, setViewport, setContextMenu } =
         params;
     const setAgentCanvasContext = useAgentStore((state) => state.setCanvasContext);
+    const nodeRegistryVersion = useNodeRegistryVersion((state) => state.version);
     const [agentUndoSnapshot, setAgentUndoSnapshot] = useState<CanvasAgentSnapshot | null>(null);
     const projectTitle = title || i18n.t("canvas.project.untitled");
 
-    const agentSnapshot = useMemo<CanvasAgentSnapshot>(() => ({ projectId, title: projectTitle, nodes, connections, selectedNodeIds: Array.from(selectedNodeIds), viewport }), [connections, projectTitle, nodes, projectId, selectedNodeIds, viewport]);
+    const agentSnapshot = useMemo<CanvasAgentSnapshot>(() => ({ projectId, title: projectTitle, nodes, connections, selectedNodeIds: Array.from(selectedNodeIds), viewport, nodeTypes: listNodeDefinitions().map((definition) => ({ type: definition.type, title: definition.title })) }), [connections, projectTitle, nodes, projectId, selectedNodeIds, viewport, nodeRegistryVersion]);
     const applyAgentOps = useCallback(
         (ops?: CanvasAgentOp[]) => {
             const safeOps = Array.isArray(ops) ? ops.filter((op) => op?.type) : [];
