@@ -25,7 +25,7 @@ export function HomeStyleLibrary({ open, onOpenChange, onSelect }: { open: boole
                 <span className="text-[11px] text-white/35">{t("home.composer.stylePickerCount", { count: STYLE_PRESETS.length })}</span>
             </div>
 
-            <div className="thin-scrollbar grid max-h-[330px] grid-cols-5 gap-2 overflow-y-auto pr-1">
+            <div className="thin-scrollbar grid max-h-[352px] grid-cols-5 gap-2 overflow-y-auto pr-1">
                 {STYLE_PRESETS.map((preset) => {
                     const name = t(`home.composer.styles.${preset.id}`);
                     return (
@@ -36,16 +36,20 @@ export function HomeStyleLibrary({ open, onOpenChange, onSelect }: { open: boole
                                 onSelect(name);
                                 onOpenChange(false);
                             }}
-                            className="group flex cursor-pointer flex-col overflow-hidden rounded-lg bg-white/[0.04] text-left ring-1 ring-transparent transition hover:bg-white/[0.09] hover:ring-white/20 focus-visible:ring-white/40 focus-visible:outline-none"
+                            className="group relative cursor-pointer overflow-hidden rounded-lg bg-white/[0.04] ring-1 ring-transparent transition hover:ring-white/25 focus-visible:ring-white/40 focus-visible:outline-none"
                             title={name}
                         >
-                            <span className="relative block aspect-[4/3] w-full overflow-hidden" style={{ background: preset.preview }}>
-                                {/* 顶部柔光 + 底部压暗：让色块读起来像「画面预览」而不是色卡 */}
-                                <span className="absolute inset-0 bg-[radial-gradient(circle_at_28%_18%,rgba(255,255,255,0.30),transparent_60%)]" />
-                                <span className="absolute inset-0 bg-[radial-gradient(circle_at_80%_75%,rgba(255,255,255,0.12),transparent_55%)]" />
-                                <span className="absolute inset-0 bg-gradient-to-t from-black/50 via-black/10 to-transparent" />
+                            <img
+                                src={`/styles/${preset.id}.jpg`}
+                                alt={name}
+                                loading="lazy"
+                                draggable={false}
+                                className="aspect-[153/124] w-full object-cover transition duration-300 group-hover:scale-[1.04]"
+                            />
+                            {/* 名称压在图片底部（与参考站一致），不额外占一行高度 */}
+                            <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/85 via-black/45 to-transparent px-1.5 pb-1 pt-6 text-center text-[10px] leading-4 text-white/90">
+                                {name}
                             </span>
-                            <span className="truncate px-1.5 py-1 text-center text-[10px] leading-4 text-white/70 transition group-hover:text-white">{name}</span>
                         </button>
                     );
                 })}
