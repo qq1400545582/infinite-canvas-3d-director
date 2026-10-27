@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "antd";
 import { useTranslation } from "react-i18next";
 
-import { DESKTOP_RELEASES_PAGE_URL } from "@/constant/desktop-download";
+import { DESKTOP_RELEASES_PAGE_URL, resolveDesktopDownloadUrl, triggerDesktopDownload } from "@/constant/desktop-download";
 
 // 仅桌面壳注入此标志（desktop/src/preload.ts）。网页版（CF Pages）无此标志 → 本组件直接返回 null，零行为变化。
 declare global {
@@ -164,6 +164,17 @@ export function LayerVersionPanel() {
         }
     }, [t]);
 
+    // 手动兜底：优先直接下载最新安装包（浏览器接管，不依赖壳内的 electron-updater 能否连上
+    // GitHub），拿不到直链才退到发布页。旧壳没有 /download-shell 时用户就走这条路。
+    const downloadInstaller = useCallback(async () => {
+        const url = await resolveDesktopDownloadUrl();
+        if (url) {
+            triggerDesktopDownload(url);
+            return;
+        }
+        window.open(DESKTOP_RELEASES_PAGE_URL, "_blank", "noopener,noreferrer");
+    }, []);
+
     // 统一在这里收敛默认值，JSX 里不再做多级属性访问（避免任何一层缺失时抛错）。
     const shellUpdate = status?.shell?.update ?? null;
     const shellVersion = status?.shell?.version || "—";
@@ -172,6 +183,10 @@ export function LayerVersionPanel() {
     const shellPercent = Math.max(0, Math.min(100, Math.round(shellUpdate?.percent ?? 0)));
     const shellUpdateError = shellUpdate?.error ?? null;
     const shellNeedsDownload = Boolean(shellUpdate?.available) && !shellUpdate?.downloaded;
+    // 新壳的 flag 一定带 downloading 字段（即使 false）；旧壳的 flag 里没有这个键。
+    // 用它判断「能不能在这个面板里下载」，避免给旧壳用户一个必然 404 的按钮。
+    const shellSupportsDownload = Boolean(shellUpdate && "downloading" in shellUpdate);
+    const shellNeedsManualInstall = shellNeedsDownload && (!shellSupportsDownload || shellEndpointMissing);
     const frontendVersion = status?.frontend?.overlayVersion || status?.frontend?.builtinVersion || "—";
     const remoteVersion = status?.remote?.version ?? null;
     const remoteChanged = status?.remote?.changed ?? 0;
@@ -263,22 +278,26 @@ export function LayerVersionPanel() {
             {error ? <div className="mt-2 text-[11px] text-red-500">{error}</div> : null}
             {taskError ? <div className="mt-2 text-[11px] text-red-500">{taskError}</div> : null}
             {/* 桌面壳下载/安装失败：除了原因，必须给出一个一定能走通的手动入口
-                （GitHub 直连不稳时自动下载会失败，但浏览器打开发布页通常可行）。 */}
+                （GitHub 直连不稳时自动下载会失败，但浏览器直链下载通常可行）。 */}
             {shellError ? (
                 <div className="mt-2 text-[11px] leading-5 text-amber-600 dark:text-amber-400">
                     <span className="break-all">{shellError}</span>
-                    <a className="ml-1 underline underline-offset-2" href={DESKTOP_RELEASES_PAGE_URL} target="_blank" rel="noopener noreferrer">
+                    <button type="button" className="ml-1 cursor-pointer bg-transparent p-0 underline underline-offset-2" onClick={() => void downloadInstaller()}>
                         {t("version.layer.manualDownload")}
-                    </a>
+                    </button>
                 </div>
             ) : null}
             {shellUpdateError ? (
                 <div className="mt-2 text-[11px] leading-5 text-red-500">
                     {t("version.layer.shellDownloadFailed")}
                     <span className="ml-1 break-all text-stone-400 dark:text-stone-500">{shellUpdateError}</span>
-                    <a className="ml-1 underline underline-offset-2 hover:text-red-600 dark:hover:text-red-400" href={DESKTOP_RELEASES_PAGE_URL} target="_blank" rel="noopener noreferrer">
+                    <button
+                        type="button"
+                        className="ml-1 cursor-pointer bg-transparent p-0 underline underline-offset-2 hover:text-red-600 dark:hover:text-red-400"
+                        onClick={() => void downloadInstaller()}
+                    >
                         {t("version.layer.manualDownload")}
-                    </a>
+                    </button>
                 </div>
             ) : null}
 
@@ -289,7 +308,7 @@ export function LayerVersionPanel() {
                 <Button size="small" type="primary" disabled={busy || !configured} onClick={() => void run("apply")} loading={busy && task?.mode === "apply"}>
                     {t("version.layer.apply")}
                 </Button>
-                {shellNeedsDownload ? (
+                {shellNeedsDownload && shellSupportsDownload ? (
                     <Button size="small" type="primary" disabled={shellDownloading} loading={shellDownloading} onClick={() => void downloadShell()}>
                         {shellDownloading ? t("version.layer.shellDownloading", { percent: shellPercent }) : t("version.layer.downloadShell")}
                     </Button>
@@ -301,9 +320,14 @@ export function LayerVersionPanel() {
                 ) : null}
             </div>
 
-            {/* 首次拿到下载能力前，旧壳没有 /download-shell：直接告诉用户需要手动装一次。 */}
-            {shellEndpointMissing && shellNeedsDownload && !shellDownloading ? (
-                <div className="mt-2 text-[11px] leading-5 text-stone-500 dark:text-stone-400">{t("version.layer.shellEndpointMissingHint")}</div>
+            {/* 旧壳没有 /download-shell（或运行时才发现不支持的兜底）：引导直接下载安装包装一次。 */}
+            {shellNeedsManualInstall && !shellDownloading ? (
+                <div className="mt-2 text-[11px] leading-5 text-stone-500 dark:text-stone-400">
+                    {t("version.layer.shellEndpointMissingHint")}
+                    <button type="button" className="ml-1 cursor-pointer bg-transparent p-0 underline underline-offset-2" onClick={() => void downloadInstaller()}>
+                        {t("version.layer.manualDownload")}
+                    </button>
+                </div>
             ) : null}
 
             {applied ? <div className="mt-2 text-[11px] text-green-600 dark:text-green-400">{t("version.layer.applied")}</div> : null}
