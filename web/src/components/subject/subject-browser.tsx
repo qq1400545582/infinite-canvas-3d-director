@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import { SubjectEditorModal, type SubjectDraft } from "@/components/subject/subject-editor-modal";
 import { cn } from "@/lib/utils";
-import { PUBLIC_SUBJECTS, useSubjectStore, type Subject, type SubjectCategory, type SubjectType } from "@/stores/use-subject-store";
+import { PUBLIC_SUBJECTS, publicSubjectList, useSubjectStore, type Subject, type SubjectCategory, type SubjectType } from "@/stores/use-subject-store";
 
 /**
  * 主体库（资产页管理 / 首页选择共用）。
@@ -98,7 +98,8 @@ export function SubjectBrowser({ mode, onPicked, keyword = "" }: { mode: "manage
     const batchRef = useRef<HTMLInputElement>(null);
 
     const list = useMemo(() => {
-        const source = type === "personal" ? personal : PUBLIC_SUBJECTS;
+        // 「公共主体」= 系统内置 + 用户主动公开的个人主体
+        const source = type === "personal" ? personal : publicSubjectList(personal);
         const key = effectiveKeyword.toLowerCase();
         return source.filter((item) => {
             if (category !== "all" && item.category !== category) return false;
@@ -135,7 +136,7 @@ export function SubjectBrowser({ mode, onPicked, keyword = "" }: { mode: "manage
                     reader.readAsDataURL(file);
                 });
                 if (dataUrl.length > 1_400_000) continue; // 单张过大跳过，避免撑爆 localStorage
-                addPersonal({ name: file.name.replace(/\.[^.]+$/, "").slice(0, 24), category: "character", tags: [], image: dataUrl, note: "", starred: false });
+                addPersonal({ name: file.name.replace(/\.[^.]+$/, "").slice(0, 24), category: "character", tags: [], image: dataUrl, note: "", starred: false, visibility: "private", voice: undefined });
                 done++;
             } catch {
                 /* 单张失败跳过 */
@@ -245,13 +246,15 @@ export function SubjectBrowser({ mode, onPicked, keyword = "" }: { mode: "manage
             <Modal open={Boolean(detail)} onCancel={() => setDetail(null)} footer={null} width={980} destroyOnHidden className="subject-detail-modal" closeIcon={false}>
                 {detail ? (
                     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-                        <div className="overflow-hidden rounded-xl bg-stone-100 dark:bg-stone-900">
-                            <img src={detail.hero || detail.image} alt={detail.name} className="aspect-[203/176] w-full object-cover" />
+                        <div className="flex items-center justify-center overflow-hidden rounded-xl bg-stone-100 dark:bg-stone-900">
+                            {/* 不拉满容器：源图分辨率有限，过度放大会更糊 */}
+                            <img src={detail.hero || detail.image} alt={detail.name} className="max-h-[460px] w-auto max-w-full object-contain" />
                         </div>
 
                         <div className="flex min-h-0 flex-col">
                             <div className="flex items-start justify-between gap-3">
                                 <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100">{detail.name}</h3>
+                                {detail.type === "personal" && detail.visibility === "public" ? <Tag className="m-0 text-[10px]">{t("subject.visibilityPublic")}</Tag> : null}
                                 <div className="flex items-center gap-1">
                                     <Tooltip title={t("subject.star")}>
                                         <button

@@ -13,12 +13,16 @@ import { persist } from "zustand/middleware";
 
 export type SubjectType = "personal" | "public";
 export type SubjectCategory = "character" | "scene";
+/** 可见性：仅自己 / 公开到公共主体库（公开后出现在「公共主体」分类，其他使用者可选） */
+export type SubjectVisibility = "private" | "public";
 
 export type Subject = {
     id: string;
     name: string;
     type: SubjectType;
     category: SubjectCategory;
+    /** 上传主体时指定：private 只在「个人添加」里，public 同时出现在「公共主体」 */
+    visibility: SubjectVisibility;
     /** 列表卡片形象图（公共主体自带三视图叠加，与参考站一致） */
     image?: string;
     /** 详情页大图（无三视图叠加） */
@@ -39,7 +43,19 @@ const heroImg = (id: string) => `/subjects/${id}-hero.jpg`;
 const turnImg = (id: string) => `/subjects/${id}-turn.jpg`;
 
 function pub(id: string, name: string, note: string, tags: string[]): Subject {
-    return { id: `public-${id}`, name, type: "public", category: "character", image: img(id), hero: heroImg(id), turn: turnImg(id), note, tags, createdAt: 0 };
+    return {
+        id: `public-${id}`,
+        name,
+        type: "public",
+        category: "character",
+        visibility: "public",
+        image: img(id),
+        hero: heroImg(id),
+        turn: turnImg(id),
+        note,
+        tags,
+        createdAt: 0,
+    };
 }
 
 /** 内置公共主体（顺序即截图里的排列）。 */
@@ -105,4 +121,12 @@ export const useSubjectStore = create<SubjectStore>()(
 export function resolveSubject(id: string | null, personal: Subject[]): Subject | null {
     if (!id) return null;
     return personal.find((item) => item.id === id) ?? PUBLIC_SUBJECTS.find((item) => item.id === id) ?? null;
+}
+
+/**
+ * 「公共主体」分类的内容 = 系统内置 + 用户主动公开的个人主体。
+ * 公开后其他使用者（同一环境的其他账号/使用者）在公共主体库里可直接选用。
+ */
+export function publicSubjectList(personal: Subject[]): Subject[] {
+    return [...PUBLIC_SUBJECTS, ...personal.filter((item) => item.visibility === "public")];
 }

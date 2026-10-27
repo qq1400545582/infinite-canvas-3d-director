@@ -3,12 +3,12 @@ import { App, Button, Input, Modal, Segmented, Select, Tooltip } from "antd";
 import { ImagePlus, Mic, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import type { Subject, SubjectCategory } from "@/stores/use-subject-store";
+import type { Subject, SubjectCategory, SubjectVisibility } from "@/stores/use-subject-store";
 
 /**
  * 新增 / 编辑主体弹窗（对照参考站的「添加新主体」）。
  *
- * 布局：左侧形象图上传区，右侧「名称 / 类别（角色·场景）/ 标签 / 音色 / 形象来源」。
+ * 布局：左侧形象图上传区，右侧「名称 / 类别（角色·场景）/ 标签 / 音色 / 形象来源 / 可见性」。
  * 「AI 生成」形象这一档本地没有接入生成服务，明确置灰并给出说明，不做占位假按钮。
  */
 
@@ -19,10 +19,12 @@ export type SubjectDraft = {
     voice?: string;
     image: string;
     note: string;
+    /** private = 只在个人添加；public = 同时出现在公共主体库 */
+    visibility: SubjectVisibility;
 };
 
-/** 形象图压缩到 256px 的 jpeg dataURL，避免原图撑爆 localStorage。 */
-function fileToCompressedDataUrl(file: File, max = 256): Promise<string> {
+/** 形象图压缩到 512px 的 jpeg dataURL：比 256 清晰，又不至于撑爆 localStorage。 */
+function fileToCompressedDataUrl(file: File, max = 512): Promise<string> {
     return new Promise((resolve, reject) => {
         const url = URL.createObjectURL(file);
         const img = new Image();
@@ -34,8 +36,9 @@ function fileToCompressedDataUrl(file: File, max = 256): Promise<string> {
                 canvas.height = Math.max(1, Math.round(img.height * scale));
                 const ctx = canvas.getContext("2d");
                 if (!ctx) throw new Error("canvas unavailable");
+                ctx.imageSmoothingQuality = "high";
                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                resolve(canvas.toDataURL("image/jpeg", 0.82));
+                resolve(canvas.toDataURL("image/jpeg", 0.9));
             } catch (error) {
                 reject(error as Error);
             } finally {
@@ -59,6 +62,7 @@ export function SubjectEditorModal({ open, initial, onClose, onSubmit }: { open:
     const [tags, setTags] = useState<string[]>([]);
     const [voice, setVoice] = useState("");
     const [note, setNote] = useState("");
+    const [visibility, setVisibility] = useState<SubjectVisibility>("private");
     const imageRef = useRef<HTMLInputElement>(null);
     const voiceRef = useRef<HTMLInputElement>(null);
 
@@ -70,6 +74,7 @@ export function SubjectEditorModal({ open, initial, onClose, onSubmit }: { open:
         setTags(initial?.tags ?? []);
         setVoice(initial?.voice ?? "");
         setNote(initial?.note ?? "");
+        setVisibility(initial?.visibility ?? "private");
     }, [initial, open]);
 
     const pickImage = async (file?: File) => {
@@ -90,7 +95,7 @@ export function SubjectEditorModal({ open, initial, onClose, onSubmit }: { open:
             message.warning(t("subject.nameRequired"));
             return;
         }
-        onSubmit({ name: name.trim(), category, tags, voice: voice || undefined, image, note: note.trim() });
+        onSubmit({ name: name.trim(), category, tags, voice: voice || undefined, image, note: note.trim(), visibility });
     };
 
     return (
@@ -181,6 +186,20 @@ export function SubjectEditorModal({ open, initial, onClose, onSubmit }: { open:
                                 },
                             ]}
                         />
+                    </div>
+
+                    <div>
+                        <div className="mb-1.5 text-xs font-medium text-stone-700 dark:text-stone-300">{t("subject.visibility")}</div>
+                        <Segmented
+                            block
+                            value={visibility}
+                            onChange={(value) => setVisibility(value as SubjectVisibility)}
+                            options={[
+                                { label: t("subject.visibilityPrivate"), value: "private" },
+                                { label: t("subject.visibilityPublic"), value: "public" },
+                            ]}
+                        />
+                        <p className="mt-1 text-[11px] leading-5 text-stone-400">{t("subject.visibilityHint")}</p>
                     </div>
 
                     <div>
