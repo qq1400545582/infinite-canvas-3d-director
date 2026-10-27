@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { App, Dropdown, Popover, Switch, Tooltip } from "antd";
-import { ArrowUp, AtSign, Clapperboard, LayoutGrid, Palette, Plus } from "lucide-react";
+import { App, Dropdown, Switch, Tooltip } from "antd";
+import { ArrowUp, AtSign, Clapperboard, LayoutGrid, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { AssetPickerModal } from "@/components/canvas/asset-picker-modal";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { HomeSkillPicker } from "@/pages/home/home-skill-picker";
+import { HomeStyleLibrary } from "@/pages/home/home-style-library";
 import { navigationTools } from "@/constant/navigation-tools";
 import { cn } from "@/lib/utils";
 import { useAgentStore } from "@/stores/use-agent-store";
@@ -62,6 +63,7 @@ export function HomeComposer() {
     const [skillOpen, setSkillOpen] = useState(false);
     const [expertOpen, setExpertOpen] = useState(false);
     const [assetOpen, setAssetOpen] = useState(false);
+    const [styleOpen, setStyleOpen] = useState(false);
     const [multiEpisode, setMultiEpisode] = useState(false);
     const fileRef = useRef<HTMLInputElement>(null);
     const textModel = useConfigStore((state) => state.config.textModel);
@@ -76,7 +78,6 @@ export function HomeComposer() {
     }, [imageModel, target, textModel, videoModel]);
 
     const ideas = useMemo(() => [t("home.composer.idea1"), t("home.composer.idea2"), t("home.composer.idea3"), t("home.composer.idea4")], [t]);
-    const styles = useMemo(() => t("home.composer.styleList").split(",").map((item) => item.trim()).filter(Boolean), [t]);
     const canSend = Boolean(value.trim());
 
     const append = useCallback((text: string) => {
@@ -142,21 +143,6 @@ export function HomeComposer() {
             else navigate("/assets");
         },
     };
-
-    const styleContent = (
-        <div className="grid max-w-[220px] grid-cols-2 gap-1">
-            {styles.map((style) => (
-                <button
-                    key={style}
-                    type="button"
-                    onClick={() => append(style)}
-                    className="cursor-pointer rounded-md px-2 py-1 text-left text-xs text-stone-600 transition hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800"
-                >
-                    {style}
-                </button>
-            ))}
-        </div>
-    );
 
     return (
         <div className="w-full">
@@ -245,16 +231,8 @@ export function HomeComposer() {
                         </div>
 
                         <div className="flex shrink-0 items-center gap-1.5">
-                            {/* ⑦ 风格库 */}
-                            <Popover content={styleContent} trigger="click" placement="topRight">
-                                <button
-                                    type="button"
-                                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-white/50 transition hover:bg-white/10 hover:text-white"
-                                >
-                                    <Palette className="size-3.5" />
-                                    {t("home.composer.styleLibrary")}
-                                </button>
-                            </Popover>
+                            {/* ⑦ 风格库：点击在输入框下方展开画风列表 */}
+                            <HomeStyleLibrary open={styleOpen} onOpenChange={setStyleOpen} onSelect={append} />
 
                             {/* ⑧ 多集 */}
                             <Tooltip title={t("home.composer.multiEpisodeHint")} placement="top" mouseEnterDelay={0.2}>

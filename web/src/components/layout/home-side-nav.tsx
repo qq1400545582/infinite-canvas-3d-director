@@ -23,7 +23,13 @@ import { useThemeStore } from "@/stores/use-theme-store";
  *   白色系配色渲染同样的能力：Agent / 主题 / 语言 / 版本 / GitHub，功能不丢。
  */
 
-const ICON_BTN = "inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-[10px] text-white/60 transition hover:bg-white/10 hover:text-white";
+/**
+ * 图标按钮：默认就要够亮（深色底上 text-white/60 会发灰看不清），
+ * 悬停再提一档，并给一圈浅色描边让可点区域明确。
+ */
+const ICON_BTN = "inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-[10px] text-white/90 transition hover:bg-white/[0.16] hover:text-white hover:ring-1 hover:ring-white/25";
+/** 选中态：实心高亮 + 描边，明显区分于其余入口。 */
+const ICON_BTN_ACTIVE = "bg-white/[0.18] text-white ring-1 ring-white/25";
 
 export function HomeSideNav() {
     const { t, i18n } = useTranslation();
@@ -40,7 +46,7 @@ export function HomeSideNav() {
     const themeLabel = t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme");
 
     return (
-        <aside className="hidden w-16 shrink-0 flex-col items-center border-r border-white/[0.06] bg-black/30 py-3 lg:flex">
+        <aside className="hidden w-16 shrink-0 flex-col items-center border-r border-white/[0.09] bg-black/40 py-3 lg:flex">
             <Link to="/" className="mb-3 flex size-9 shrink-0 items-center justify-center rounded-[10px] text-white transition hover:bg-white/10" aria-label={t("meta.title")}>
                 <span
                     className="size-5 bg-current"
@@ -58,7 +64,7 @@ export function HomeSideNav() {
                     const label = t(`navigation.${tool.slug as NavigationToolSlug}`);
                     return (
                         <Tooltip key={tool.slug} title={label} placement="right" mouseEnterDelay={0.2}>
-                            <Link to={`/${tool.slug}`} aria-label={label} className={cn(ICON_BTN, active ? "bg-white/[0.14] text-white" : "")}>
+                            <Link to={`/${tool.slug}`} aria-label={label} className={cn(ICON_BTN, active ? ICON_BTN_ACTIVE : "")}>
                                 <Icon className="size-[18px]" />
                             </Link>
                         </Tooltip>
@@ -89,7 +95,7 @@ export function HomeSideNav() {
                     <VersionReleaseModal className={cn(ICON_BTN, "text-[10px] font-medium tracking-tight")} />
                 </Tooltip>
 
-                <GitHubLink className={cn(ICON_BTN, "bg-transparent text-base hover:bg-white/10")} />
+                <GitHubLink className={cn(ICON_BTN, "bg-transparent text-base hover:bg-white/[0.14]")} />
             </div>
         </aside>
     );
