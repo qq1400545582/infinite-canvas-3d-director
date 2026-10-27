@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { Middleware } from "./server";
-import { readShellUpdateFlag, quitAndInstallShellUpdate } from "./auto-update";
+import { readShellUpdateFlag, quitAndInstallShellUpdate, downloadShellUpdate } from "./auto-update";
 
 /**
  * 三层更新契约 · 桌面端侧（P3）
@@ -355,11 +355,26 @@ export function createLayerUpdateMiddleware(overlayDir: string, builtinDir: stri
         }
         if (url === "/__layer-update/install-shell" && req.method === "POST") {
             try {
-                quitAndInstallShellUpdate();
+                // 未下载完成时 quitAndInstall() 会静默什么都不做，必须在这里明确拒绝，
+                // 否则用户点了按钮只会看到窗口关不掉、也没有任何反馈。
+                if (!quitAndInstallShellUpdate()) {
+                    return sendJson(res, 400, { ok: false, error: "shell-update-not-downloaded" });
+                }
                 return sendJson(res, 200, { ok: true });
             } catch (error) {
                 return sendJson(res, 500, { ok: false, error: (error as Error).message });
             }
+        }
+        // 下载桌面壳安装包（约 100MB，electron-updater 不自动下载）。立即返回 202，
+        // 进度通过 /__layer-update/status 的 shell.update.percent 轮询。
+        if (url === "/__layer-update/download-shell" && req.method === "POST") {
+            const flag = readShellUpdateFlag();
+            if (!flag?.available) return sendJson(res, 400, { ok: false, error: "no-shell-update" });
+            if (flag.downloaded) return sendJson(res, 200, { ok: true, downloaded: true });
+            void downloadShellUpdate().catch((error: Error) => {
+                console.error("[desktop] download shell update failed:", error?.message || error);
+            });
+            return sendJson(res, 202, { ok: true, started: true });
         }
         return sendJson(res, 404, { ok: false, error: "unknown layer-update endpoint" });
     };
