@@ -8,7 +8,6 @@ import { fetchPrompts, type Prompt } from "@/services/api/prompts";
 import { HomeComposer } from "@/pages/home/home-composer";
 import { HomeSideNav } from "@/components/layout/home-side-nav";
 import { MobileNavDrawer } from "@/components/layout/mobile-nav-drawer";
-import { navigationTools } from "@/constant/navigation-tools";
 import i18n from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -42,7 +41,6 @@ export default function IndexPage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
     const navigate = useNavigate();
-    const [primaryTool] = navigationTools;
     const [promptShowcase, setPromptShowcase] = useState<Prompt[]>([]);
     const [previewIndex, setPreviewIndex] = useState(0);
     const [previewOpen, setPreviewOpen] = useState(false);
@@ -86,16 +84,6 @@ export default function IndexPage() {
 
                         <div className="mt-9 w-full max-w-3xl">
                             <HomeComposer />
-                        </div>
-
-                        <div className="mt-6 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs text-white/45">
-                            <button type="button" className="cursor-pointer transition hover:text-white" onClick={() => navigate(`/${primaryTool.slug}`)}>
-                                {t("home.start")}
-                            </button>
-                            <span className="text-white/20">·</span>
-                            <button type="button" className="cursor-pointer transition hover:text-white" onClick={() => navigate("/canvas")}>
-                                {t("home.openCanvas")}
-                            </button>
                         </div>
                     </div>
 
