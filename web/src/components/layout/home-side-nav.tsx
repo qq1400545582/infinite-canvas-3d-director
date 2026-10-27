@@ -3,97 +3,93 @@ import { Tooltip } from "antd";
 import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
-import { DesktopDownloadButton } from "@/components/layout/desktop-download-button";
-import { UserStatusActions } from "@/components/layout/user-status-actions";
+import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
+import { GitHubLink } from "@/components/layout/github-link";
+import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { navigationTools, type NavigationToolSlug } from "@/constant/navigation-tools";
+import { changeAppLocale, type AppLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { useAgentStore } from "@/stores/use-agent-store";
+import { useThemeStore } from "@/stores/use-theme-store";
 
 /**
- * 首页左侧导航（参考 Seko 的侧边栏布局）：品牌区 → 分组菜单 → 底部工具区。
+ * 首页左侧导航 —— 窄图标栏（参考 Seko 左侧 rail）。
  *
  * 边界：
- * - 只在首页渲染，且只在 md 及以上显示（`hidden md:flex`）；小屏继续用 AppTopNav 的
- *   顶部条 + MobileNavDrawer，避免侧栏在手机上挤占宽度。
+ * - 只由首页渲染，且只在 lg+ 显示；小屏继续用 AppTopNav 的顶部条 + MobileNavDrawer。
  * - 入口与原来的顶部导航**完全一致**（我的画布 / 生图工作台 / 视频创作台 / 提示词库 /
- *   专家库 / 我的资产 / 配置），只是从横向改为纵向并按用途分组。
- * - 右侧原有的 Agent、下载桌面端、语言/主题/版本/GitHub 等操作收敛到底部工具区，不丢功能。
+ *   专家库 / 我的资产 / 配置），只是收成图标，名称用 Tooltip 显示。
+ * - 首页是固定深色视觉，所以这里不复用 UserStatusActions（它跟随全局明暗），改为自带
+ *   白色系配色渲染同样的能力：Agent / 主题 / 语言 / 版本 / GitHub，功能不丢。
  */
 
-/** 分组：只调整视觉组织，不增删任何入口。 */
-const GROUPS = [
-    { key: "create", slugs: ["canvas", "image", "video"] },
-    { key: "resources", slugs: ["prompts", "experts", "assets"] },
-    { key: "settings", slugs: ["config"] },
-] as const;
+const ICON_BTN = "inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-[10px] text-white/60 transition hover:bg-white/10 hover:text-white";
 
 export function HomeSideNav() {
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const { pathname } = useLocation();
+    const theme = useThemeStore((state) => state.theme);
+    const setTheme = useThemeStore((state) => state.setTheme);
     const panelOpen = useAgentStore((state) => state.panelOpen);
     const togglePanel = useAgentStore((state) => state.togglePanel);
     const activeSlug = pathname.split("/").filter(Boolean)[0];
 
-    const itemBase = "group flex h-9 shrink-0 items-center gap-2.5 rounded-lg px-2.5 text-sm leading-6 transition-colors";
-    const itemIdle = "text-stone-600 hover:bg-stone-200/60 hover:text-stone-950 dark:text-stone-400 dark:hover:bg-stone-800/60 dark:hover:text-stone-100";
-    // 选中项做成「浮起的小卡片」，这是 Seko 侧栏最明显的视觉特征。
-    const itemActive = "bg-white font-medium text-stone-950 shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-stone-200/80 dark:bg-stone-800 dark:text-stone-50 dark:ring-stone-700/70";
+    const locale = i18n.resolvedLanguage as AppLocale;
+    const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
+    const languageLabel = t("topNav.switchLanguage", { language: t(nextLocale === "zh-CN" ? "locale.zhCN" : "locale.enUS") });
+    const themeLabel = t(theme === "dark" ? "topNav.lightTheme" : "topNav.darkTheme");
 
     return (
-        <aside className="hidden w-64 shrink-0 flex-col border-r border-stone-200/80 bg-stone-50/70 lg:flex dark:border-stone-800 dark:bg-stone-950/40">
-            <Link
-                to="/"
-                className="flex h-14 shrink-0 items-center gap-2 px-4 text-sm font-semibold leading-none tracking-tight text-stone-950 transition hover:text-stone-600 dark:text-stone-100 dark:hover:text-stone-300"
-            >
+        <aside className="hidden w-16 shrink-0 flex-col items-center border-r border-white/[0.06] bg-black/30 py-3 lg:flex">
+            <Link to="/" className="mb-3 flex size-9 shrink-0 items-center justify-center rounded-[10px] text-white transition hover:bg-white/10" aria-label={t("meta.title")}>
                 <span
-                    className="size-5 shrink-0 bg-current"
+                    className="size-5 bg-current"
                     style={{
                         mask: "url(/logo.svg) center / contain no-repeat",
                         WebkitMask: "url(/logo.svg) center / contain no-repeat",
                     }}
                 />
-                <span className="text-base font-medium">{t("meta.title")}</span>
             </Link>
 
-            <nav className="hide-scrollbar min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-                {GROUPS.map((group, groupIndex) => {
-                    const tools = navigationTools.filter((tool) => (group.slugs as readonly string[]).includes(tool.slug));
-                    if (!tools.length) return null;
+            <nav className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-y-auto">
+                {navigationTools.map((tool) => {
+                    const Icon = tool.icon;
+                    const active = tool.slug === activeSlug;
+                    const label = t(`navigation.${tool.slug as NavigationToolSlug}`);
                     return (
-                        <div key={group.key}>
-                            <div className={cn("px-2.5 text-[11px] font-medium tracking-wide text-stone-400 dark:text-stone-500", groupIndex === 0 ? "mb-1 pt-1" : "mb-1 pt-4")}>
-                                {t(`home.sidebar.${group.key}`)}
-                            </div>
-                            <div className="space-y-0.5">
-                                {tools.map((tool) => {
-                                    const Icon = tool.icon;
-                                    const active = tool.slug === activeSlug;
-                                    return (
-                                        <Link key={tool.slug} to={`/${tool.slug}`} className={cn(itemBase, active ? itemActive : itemIdle)}>
-                                            <Icon className="size-4 shrink-0" />
-                                            <span className="truncate">{t(`navigation.${tool.slug as NavigationToolSlug}`)}</span>
-                                        </Link>
-                                    );
-                                })}
-                            </div>
-                        </div>
+                        <Tooltip key={tool.slug} title={label} placement="right" mouseEnterDelay={0.2}>
+                            <Link to={`/${tool.slug}`} aria-label={label} className={cn(ICON_BTN, active ? "bg-white/[0.14] text-white" : "")}>
+                                <Icon className="size-[18px]" />
+                            </Link>
+                        </Tooltip>
                     );
                 })}
             </nav>
 
-            <div className="shrink-0 border-t border-stone-200/80 p-3 dark:border-stone-800">
-                <Tooltip title={t(panelOpen ? "topNav.closeAgent" : "topNav.openAgent")} placement="right">
-                    <button type="button" className={cn(itemBase, itemIdle, "w-full")} onClick={togglePanel} aria-label={t(panelOpen ? "topNav.closeAgent" : "topNav.openAgent")}>
-                        <Bot className="size-4 shrink-0" />
-                        <span className="truncate">Agent</span>
-                        <span className={cn("ml-auto size-1.5 shrink-0 rounded-full", panelOpen ? "bg-emerald-500" : "bg-stone-300 dark:bg-stone-600")} />
+            {/* 底部：与顶部导航右侧那组操作一一对应，只是换成图标形态。 */}
+            <div className="mt-2 flex shrink-0 flex-col items-center gap-1 border-t border-white/[0.08] pt-2">
+                <Tooltip title={t(panelOpen ? "topNav.closeAgent" : "topNav.openAgent")} placement="right" mouseEnterDelay={0.2}>
+                    <button type="button" className={cn(ICON_BTN, "relative")} onClick={togglePanel} aria-label={t(panelOpen ? "topNav.closeAgent" : "topNav.openAgent")}>
+                        <Bot className="size-[18px]" />
+                        <span className={cn("absolute right-1.5 top-1.5 size-1.5 rounded-full", panelOpen ? "bg-emerald-400" : "bg-white/25")} />
                     </button>
                 </Tooltip>
-                <div className="mt-1 flex items-center justify-between gap-1">
-                    {/* 配置已经在菜单里，底部工具区不再重复一个设置入口。 */}
-                    <UserStatusActions showConfig={false} />
-                    <DesktopDownloadButton />
-                </div>
+
+                <Tooltip title={themeLabel} placement="right" mouseEnterDelay={0.2}>
+                    <AnimatedThemeToggler theme={theme} onThemeChange={setTheme} className={ICON_BTN} aria-label={themeLabel} title={themeLabel} />
+                </Tooltip>
+
+                <Tooltip title={languageLabel} placement="right" mouseEnterDelay={0.2}>
+                    <button type="button" className={cn(ICON_BTN, "text-[11px] font-semibold")} onClick={() => void changeAppLocale(nextLocale)} aria-label={languageLabel}>
+                        {locale === "zh-CN" ? "中" : "EN"}
+                    </button>
+                </Tooltip>
+
+                <Tooltip title={t("version.viewUpdates")} placement="right" mouseEnterDelay={0.2}>
+                    <VersionReleaseModal className={cn(ICON_BTN, "text-[10px] font-medium tracking-tight")} />
+                </Tooltip>
+
+                <GitHubLink className={cn(ICON_BTN, "bg-transparent text-base hover:bg-white/10")} />
             </div>
         </aside>
     );

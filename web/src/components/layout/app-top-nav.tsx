@@ -38,11 +38,12 @@ export function AppTopNav() {
 
     return (
         <>
-            {!hideHeader ? (
+            {/* 首页是固定深色的独立视觉，顶部条会和它割裂：首页不渲染 header，
+                改由 HomeSideNav（lg+）与首页自带的菜单按钮（小屏）+ 本组件的抽屉承担入口。 */}
+            {!hideHeader && !isHome ? (
                 <header
                     className={cn(
                         "sticky top-0 z-20 h-14 shrink-0 border-b border-stone-200 bg-background/90 backdrop-blur-xl dark:border-stone-800",
-                        isHome && "lg:hidden",
                     )}
                 >
                     <div className="mx-auto flex h-full max-w-7xl items-stretch justify-between gap-5 px-6">
