@@ -879,6 +879,11 @@ expertLibrary: {
         showcaseTitle: "Keep every great result",
         showcaseDescription: "Save reliable prompts, visual references, and generated images so your next creation starts from proven ideas.",
         viewPrompts: "View prompt library",
+        sidebar: {
+            create: "Create",
+            resources: "Library",
+            settings: "Settings",
+        },
     },
     version: {
         viewUpdates: "View release updates",

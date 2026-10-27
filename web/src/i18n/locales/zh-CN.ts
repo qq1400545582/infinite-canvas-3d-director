@@ -879,6 +879,11 @@ expertLibrary: {
         showcaseTitle: "沉淀每一次好结果",
         showcaseDescription: "收藏稳定出图的提示词、参考风格和结果图片，让下一次创作从已有经验开始。",
         viewPrompts: "查看提示词库",
+        sidebar: {
+            create: "创作",
+            resources: "资源",
+            settings: "设置",
+        },
     },
     version: {
         viewUpdates: "查看版本更新",
