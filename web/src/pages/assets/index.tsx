@@ -5,6 +5,7 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { useCopyText } from "@/hooks/use-copy-text";
+import { SubjectBrowser } from "@/components/subject/subject-browser";
 import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob, getImagePreviewRevision, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
@@ -24,7 +25,7 @@ type AssetFormValues = {
 
 type ImageDraft = ImageAsset["data"] | null;
 
-const kindOptions = ["all", "text", "image", "video"] as const;
+const kindOptions = ["all", "text", "image", "video", "subject"] as const;
 
 export default function AssetsPage() {
     const { message } = App.useApp();
@@ -39,7 +40,7 @@ export default function AssetsPage() {
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
     const [keyword, setKeyword] = useState("");
-    const [kindFilter, setKindFilter] = useState<AssetKind | "all">("all");
+    const [kindFilter, setKindFilter] = useState<AssetKind | "all" | "subject">("all");
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(10);
     const [editingAsset, setEditingAsset] = useState<Asset | null>(null);
@@ -56,6 +57,9 @@ export default function AssetsPage() {
 
     const filteredAssets = useMemo(() => {
         const query = keyword.trim().toLowerCase();
+        // 「主体」是独立的一类（主体库自成一套数据，不进 Asset 模型），这里直接返回空，
+        // 由列表区渲染主体库视图。
+        if (kindFilter === "subject") return [];
         return validAssets.filter((asset) => {
             if (kindFilter !== "all" && asset.kind !== kindFilter) return false;
             if (!query) return true;
@@ -269,27 +273,34 @@ export default function AssetsPage() {
                 </div>
 
                 <div className="mx-auto flex max-w-7xl flex-col gap-5">
-                    <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                        {visibleAssets.map((asset) => (
-                            <AssetCard key={asset.id} asset={asset} onOpen={() => setPreviewAsset(asset)} onEdit={() => openEdit(asset)} onCopy={copyAssetText} onDownload={downloadImage} onDelete={() => setDeletingAsset(asset)} />
-                        ))}
-                    </div>
+                    {kindFilter === "subject" ? (
+                        // 主体库：个人主体可自由上传，公共主体由系统提供，选定后供创作任务使用
+                        <SubjectBrowser mode="manage" keyword={keyword} />
+                    ) : (
+                        <>
+                            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                                {visibleAssets.map((asset) => (
+                                    <AssetCard key={asset.id} asset={asset} onOpen={() => setPreviewAsset(asset)} onEdit={() => openEdit(asset)} onCopy={copyAssetText} onDownload={downloadImage} onDelete={() => setDeletingAsset(asset)} />
+                                ))}
+                            </div>
 
-                    {!visibleAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("assets.empty")} className="py-20" /> : null}
+                            {!visibleAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("assets.empty")} className="py-20" /> : null}
 
-                    <div className="flex justify-center">
-                        <Pagination
-                            current={page}
-                            pageSize={pageSize}
-                            total={filteredAssets.length}
-                            showSizeChanger
-                            pageSizeOptions={[10, 20, 50, 100]}
-                            onChange={(nextPage, nextPageSize) => {
-                                setPage(nextPage);
-                                setPageSize(nextPageSize);
-                            }}
-                        />
-                    </div>
+                            <div className="flex justify-center">
+                                <Pagination
+                                    current={page}
+                                    pageSize={pageSize}
+                                    total={filteredAssets.length}
+                                    showSizeChanger
+                                    pageSizeOptions={[10, 20, 50, 100]}
+                                    onChange={(nextPage, nextPageSize) => {
+                                        setPage(nextPage);
+                                        setPageSize(nextPageSize);
+                                    }}
+                                />
+                            </div>
+                        </>
+                    )}
                 </div>
             </main>
 

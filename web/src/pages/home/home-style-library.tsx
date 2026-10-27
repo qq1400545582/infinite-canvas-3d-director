@@ -1,5 +1,5 @@
 import { Popover } from "antd";
-import { Palette } from "lucide-react";
+import { Check, Palette, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { STYLE_PRESETS } from "@/pages/home/style-presets";
@@ -15,7 +15,20 @@ import { cn } from "@/lib/utils";
 
 const PANEL_WIDTH = 620;
 
-export function HomeStyleLibrary({ open, onOpenChange, onSelect }: { open: boolean; onOpenChange: (open: boolean) => void; onSelect: (styleName: string) => void }) {
+export function HomeStyleLibrary({
+    open,
+    onOpenChange,
+    value,
+    onSelect,
+    onClear,
+}: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    /** 已选风格名；有值时按钮直接显示它，不再显示「风格库」 */
+    value: string | null;
+    onSelect: (styleName: string) => void;
+    onClear: () => void;
+}) {
     const { t } = useTranslation();
 
     const content = (
@@ -50,6 +63,11 @@ export function HomeStyleLibrary({ open, onOpenChange, onSelect }: { open: boole
                             <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/85 via-black/45 to-transparent px-1.5 pb-1 pt-6 text-center text-[10px] leading-4 text-white/90">
                                 {name}
                             </span>
+                            {value === name ? (
+                                <span className="pointer-events-none absolute right-1 top-1 inline-flex size-4 items-center justify-center rounded-full bg-white text-stone-900">
+                                    <Check className="size-2.5" strokeWidth={3} />
+                                </span>
+                            ) : null}
                         </button>
                     );
                 })}
@@ -72,13 +90,33 @@ export function HomeStyleLibrary({ open, onOpenChange, onSelect }: { open: boole
         >
             <button
                 type="button"
+                onClick={() => onOpenChange(!open)}
+                title={value ? `${t("home.composer.styleLibrary")}：${value}` : t("home.composer.styleLibrary")}
                 className={cn(
-                    "inline-flex cursor-pointer items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] transition",
-                    open ? "bg-white/[0.12] text-white" : "text-white/55 hover:bg-white/10 hover:text-white",
+                    "inline-flex max-w-[130px] cursor-pointer items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] transition",
+                    value
+                        ? "bg-white/[0.14] text-white ring-1 ring-white/25"
+                        : open
+                          ? "bg-white/[0.12] text-white"
+                          : "text-white/55 hover:bg-white/10 hover:text-white",
                 )}
             >
-                <Palette className="size-3.5" />
-                {t("home.composer.styleLibrary")}
+                <Palette className="size-3.5 shrink-0" />
+                <span className="truncate">{value || t("home.composer.styleLibrary")}</span>
+                {value ? (
+                    <span
+                        role="button"
+                        tabIndex={-1}
+                        aria-label={t("home.composer.clearStyle")}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onClear();
+                        }}
+                        className="inline-flex shrink-0 items-center justify-center rounded-full p-0.5 transition hover:bg-white/20"
+                    >
+                        <X className="size-3" />
+                    </span>
+                ) : null}
             </button>
         </Popover>
     );

@@ -1,17 +1,18 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { App, Dropdown, Switch, Tooltip } from "antd";
-import { ArrowUp, AtSign, Clapperboard, LayoutGrid, Plus } from "lucide-react";
+import { App, Button, Dropdown, Modal, Switch, Tooltip } from "antd";
+import { ArrowUp, AtSign, Clapperboard, LayoutGrid, Palette, Plus, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
-import { AssetPickerModal } from "@/components/canvas/asset-picker-modal";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
+import { SubjectBrowser } from "@/components/subject/subject-browser";
 import { HomeSkillPicker } from "@/pages/home/home-skill-picker";
 import { HomeStyleLibrary } from "@/pages/home/home-style-library";
 import { navigationTools } from "@/constant/navigation-tools";
 import { cn } from "@/lib/utils";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useConfigStore } from "@/stores/use-config-store";
+import { PUBLIC_SUBJECTS, useSubjectStore } from "@/stores/use-subject-store";
 
 /**
  * 首页灵感输入框（对齐参考站 composer 的入口与交互）。
@@ -62,8 +63,10 @@ export function HomeComposer() {
     const [value, setValue] = useState("");
     const [skillOpen, setSkillOpen] = useState(false);
     const [expertOpen, setExpertOpen] = useState(false);
-    const [assetOpen, setAssetOpen] = useState(false);
+    const [subjectOpen, setSubjectOpen] = useState(false);
     const [styleOpen, setStyleOpen] = useState(false);
+    // 风格不再写进输入框，而是作为「本次任务设定的风格」挂在按钮上。
+    const [selectedStyle, setSelectedStyle] = useState<string | null>(null);
     const [multiEpisode, setMultiEpisode] = useState(false);
     const fileRef = useRef<HTMLInputElement>(null);
     const textModel = useConfigStore((state) => state.config.textModel);
@@ -71,6 +74,15 @@ export function HomeComposer() {
     const videoModel = useConfigStore((state) => state.config.videoModel);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const togglePanel = useAgentStore((state) => state.togglePanel);
+    // 主体选择持久化在 subject store：换页面 / 下次进入仍是同一个主体，保证任务前后一致。
+    const selectedSubjectId = useSubjectStore((state) => state.selectedId);
+    const personalSubjects = useSubjectStore((state) => state.personal);
+    const select = useSubjectStore((state) => state.select);
+    const subject = useMemo(
+        () => personalSubjects.find((item) => item.id === selectedSubjectId) ?? PUBLIC_SUBJECTS.find((item) => item.id === selectedSubjectId) ?? null,
+        [personalSubjects, selectedSubjectId],
+    );
+    const subjectLabel = subject ? subject.name : t("home.composer.subjectAsset");
 
     const model = useMemo(() => {
         const map: Record<TargetSlug, string> = { canvas: textModel, image: imageModel, video: videoModel, drama: textModel };
@@ -80,23 +92,25 @@ export function HomeComposer() {
     const ideas = useMemo(() => [t("home.composer.idea1"), t("home.composer.idea2"), t("home.composer.idea3"), t("home.composer.idea4")], [t]);
     const canSend = Boolean(value.trim());
 
-    const append = useCallback((text: string) => {
-        setValue((prev) => (prev ? `${prev}${/[，,、\s]$/.test(prev) ? "" : "，"}${text}` : text));
-    }, []);
-
     const submit = useCallback(async () => {
         const text = value.trim();
         if (!text) return;
         const destination = multiEpisode ? MULTI_TO : TARGETS.find((item) => item.slug === target)!.to;
+        // 主体与风格作为任务上下文一起带出：主体附带固定描述，保证整条任务前后一致。
+        const lines: string[] = [];
+        if (subject) lines.push(`@${subject.name}（${subject.note}）`);
+        lines.push(text);
+        if (selectedStyle) lines.push(`画面风格：${selectedStyle}`);
+        const composed = lines.join("\n");
         // 非安全上下文（局域网 IP 访问）下 clipboard 不可用 → 静默跳过，不阻断跳转。
         try {
-            await navigator.clipboard.writeText(text);
+            await navigator.clipboard.writeText(composed);
             message.success(t("home.composer.copied"));
         } catch {
             /* 无剪贴板权限时只做跳转 */
         }
         navigate(destination);
-    }, [message, multiEpisode, navigate, t, target, value]);
+    }, [message, multiEpisode, navigate, selectedStyle, subject, t, target, value]);
 
     /** 输入 “/” 即引用提示词（对应参考站的 Skill 引用语法）。 */
     const handleChange = useCallback((next: string) => {
@@ -231,8 +245,8 @@ export function HomeComposer() {
                         </div>
 
                         <div className="flex shrink-0 items-center gap-1.5">
-                            {/* ⑦ 风格库：点击在输入框下方展开画风列表 */}
-                            <HomeStyleLibrary open={styleOpen} onOpenChange={setStyleOpen} onSelect={append} />
+                            {/* ⑦ 风格库：选中后按钮直接显示风格名（不再写进输入框） */}
+                            <HomeStyleLibrary open={styleOpen} onOpenChange={setStyleOpen} value={selectedStyle} onSelect={setSelectedStyle} onClear={() => setSelectedStyle(null)} />
 
                             {/* ⑧ 多集 */}
                             <Tooltip title={t("home.composer.multiEpisodeHint")} placement="top" mouseEnterDelay={0.2}>
@@ -242,15 +256,18 @@ export function HomeComposer() {
                                 </label>
                             </Tooltip>
 
-                            {/* ⑨ @ 主体资产 */}
+                            {/* ⑨ @ 主体资产：打开主体库（个人 / 公共），选中后按钮显示主体名 */}
                             <Tooltip title={t("home.composer.subjectAssetHint")} placement="top" mouseEnterDelay={0.2}>
                                 <button
                                     type="button"
-                                    onClick={() => setAssetOpen(true)}
-                                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-white/50 transition hover:bg-white/10 hover:text-white"
+                                    onClick={() => setSubjectOpen(true)}
+                                    className={cn(
+                                        "inline-flex max-w-[130px] cursor-pointer items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] transition",
+                                        subject ? "bg-white/[0.14] text-white ring-1 ring-white/25" : "text-white/50 hover:bg-white/10 hover:text-white",
+                                    )}
                                 >
-                                    <AtSign className="size-3.5" />
-                                    {t("home.composer.subjectAsset")}
+                                    <AtSign className="size-3.5 shrink-0" />
+                                    <span className="truncate">{subjectLabel}</span>
                                 </button>
                             </Tooltip>
 
@@ -311,19 +328,32 @@ export function HomeComposer() {
 
             <HomeSkillPicker open={expertOpen} onOpenChange={setExpertOpen} onSelect={insertExpert} />
 
-            <AssetPickerModal
-                open={assetOpen}
-                onClose={() => setAssetOpen(false)}
-                onInsert={(payload) => {
-                    setAssetOpen(false);
-                    if (payload.kind === "text") {
-                        setValue((prev) => (prev ? `${prev}\n${payload.content}` : payload.content));
-                        return;
-                    }
-                    // 首页没有参考图挂载点：如实告知，而不是静默失败。
-                    message.info(t("home.composer.assetMediaUnsupported"));
-                }}
-            />
+            <Modal
+                title={t("subject.title")}
+                className="subject-picker-modal"
+                open={subjectOpen}
+                onCancel={() => setSubjectOpen(false)}
+                footer={
+                    subject
+                        ? [
+                              <Button
+                                  key="clear"
+                                  danger
+                                  onClick={() => {
+                                      select(null);
+                                      setSubjectOpen(false);
+                                  }}
+                              >
+                                  {t("subject.clear")}
+                              </Button>,
+                          ]
+                        : null
+                }
+                width={860}
+                destroyOnHidden
+            >
+                <SubjectBrowser mode="pick" onPicked={() => setSubjectOpen(false)} />
+            </Modal>
         </div>
     );
 }
