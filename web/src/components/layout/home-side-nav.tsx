@@ -27,9 +27,9 @@ import { useThemeStore } from "@/stores/use-theme-store";
  * 图标按钮：默认就要够亮（深色底上 text-white/60 会发灰看不清），
  * 悬停再提一档，并给一圈浅色描边让可点区域明确。
  */
-const ICON_BTN = "inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-[10px] text-white/90 transition hover:bg-white/[0.16] hover:text-white hover:ring-1 hover:ring-white/25";
+const ICON_BTN = "inline-flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-[10px] text-white transition hover:bg-white/[0.18] hover:ring-1 hover:ring-white/30";
 /** 选中态：实心高亮 + 描边，明显区分于其余入口。 */
-const ICON_BTN_ACTIVE = "bg-white/[0.18] text-white ring-1 ring-white/25";
+const ICON_BTN_ACTIVE = "bg-white/[0.22] text-white ring-1 ring-white/40";
 
 export function HomeSideNav() {
     const { t, i18n } = useTranslation();
@@ -65,7 +65,7 @@ export function HomeSideNav() {
                     return (
                         <Tooltip key={tool.slug} title={label} placement="right" mouseEnterDelay={0.2}>
                             <Link to={`/${tool.slug}`} aria-label={label} className={cn(ICON_BTN, active ? ICON_BTN_ACTIVE : "")}>
-                                <Icon className="size-[18px]" />
+                                <Icon className="size-[18px]" strokeWidth={2} />
                             </Link>
                         </Tooltip>
                     );
@@ -76,8 +76,8 @@ export function HomeSideNav() {
             <div className="mt-2 flex shrink-0 flex-col items-center gap-1 border-t border-white/[0.08] pt-2">
                 <Tooltip title={t(panelOpen ? "topNav.closeAgent" : "topNav.openAgent")} placement="right" mouseEnterDelay={0.2}>
                     <button type="button" className={cn(ICON_BTN, "relative")} onClick={togglePanel} aria-label={t(panelOpen ? "topNav.closeAgent" : "topNav.openAgent")}>
-                        <Bot className="size-[18px]" />
-                        <span className={cn("absolute right-1.5 top-1.5 size-1.5 rounded-full", panelOpen ? "bg-emerald-400" : "bg-white/25")} />
+                        <Bot className="size-[18px]" strokeWidth={2} />
+                        <span className={cn("absolute right-1.5 top-1.5 size-1.5 rounded-full", panelOpen ? "bg-emerald-400" : "bg-white/40")} />
                     </button>
                 </Tooltip>
 

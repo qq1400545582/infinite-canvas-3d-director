@@ -1,57 +1,77 @@
 import { useMemo, useRef, useState } from "react";
-import { App, Button, Input, Modal, Tag } from "antd";
-import { Plus, Trash2, Upload } from "lucide-react";
+import { App, Button, Input, Modal, Popover, Select, Tag, Tooltip } from "antd";
+import { Pencil, Plus, Search, Star, Trash2, Upload } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { SubjectEditorModal, type SubjectDraft } from "@/components/subject/subject-editor-modal";
 import { cn } from "@/lib/utils";
-import { PUBLIC_SUBJECTS, useSubjectStore, type Subject, type SubjectType } from "@/stores/use-subject-store";
+import { PUBLIC_SUBJECTS, useSubjectStore, type Subject, type SubjectCategory, type SubjectType } from "@/stores/use-subject-store";
 
 /**
- * 主体库浏览 / 选择组件（资产页与首页共用）。
+ * 主体库（资产页管理 / 首页选择共用）。
  *
- * - `mode="manage"`：资产页用，支持上传个人主体、删除个人主体。
- * - `mode="pick"`：首页用，点卡片即选定并回调；不做增删。
- *
- * 选定结果写入 subject store 的 `selectedId`（localStorage 持久化），
- * 因此同一主体的描述会在后续任务中保持不变——这就是「前后一致性」的落点。
+ * 列表对照参考站：顶部「个人添加 / 公共主体」两个 tab，右侧类别筛选与搜索；
+ * 卡片是人物图 + 名称 + 星标，公共主体图上左下角叠着三视图（悬停放大）。
+ * 点卡片进入详情：左侧大图，右侧类别 / 主体描述 / 三视图 / 「使用主体创作」。
  */
 
-/** 上传图压缩到 256px 的 jpeg dataURL，避免把原图塞进 localStorage。 */
-function fileToCompressedDataUrl(file: File, max = 256): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const url = URL.createObjectURL(file);
-        const img = new Image();
-        img.onload = () => {
-            try {
-                const scale = Math.min(1, max / Math.max(img.width, img.height));
-                const canvas = document.createElement("canvas");
-                canvas.width = Math.max(1, Math.round(img.width * scale));
-                canvas.height = Math.max(1, Math.round(img.height * scale));
-                const ctx = canvas.getContext("2d");
-                if (!ctx) throw new Error("canvas unavailable");
-                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                resolve(canvas.toDataURL("image/jpeg", 0.82));
-            } catch (error) {
-                reject(error as Error);
-            } finally {
-                URL.revokeObjectURL(url);
-            }
-        };
-        img.onerror = () => {
-            URL.revokeObjectURL(url);
-            reject(new Error("image load failed"));
-        };
-        img.src = url;
-    });
-}
+const CARD_ASPECT = "aspect-[203/238]";
 
-function SubjectAvatar({ subject }: { subject: Subject }) {
-    if (subject.image) return <img src={subject.image} alt={subject.name} className="aspect-square w-full object-cover" />;
-    // 公共主体没有形象素材：用名字首字 + 稳定色相，避免空白卡
-    const hue = [...subject.name].reduce((acc, char) => acc + char.charCodeAt(0), 0) % 360;
+/** 三视图热区（相对卡片图的百分比，与裁切坐标一致） */
+const TURN_HOTSPOT = { left: "4.9%", top: "81.1%", width: "65.5%", height: "18.9%" };
+
+function SubjectCard({ subject, active, onOpen, onStar }: { subject: Subject; active: boolean; onOpen: () => void; onStar: () => void }) {
+    const { t } = useTranslation();
+    const cover = subject.image;
+
+    const turnPopover = subject.turn ? (
+        <div className="w-[320px]">
+            <img src={subject.turn} alt={t("subject.turnAround")} className="w-full rounded-md" />
+            <div className="mt-1.5 text-center text-[11px] text-stone-400">{t("subject.turnAround")}</div>
+        </div>
+    ) : null;
+
     return (
-        <div className="flex aspect-square w-full items-center justify-center text-2xl font-medium text-white/95" style={{ background: `linear-gradient(140deg, hsl(${hue} 42% 34%), hsl(${(hue + 40) % 360} 46% 52%))` }}>
-            {subject.name.slice(0, 1)}
+        <div className="group relative">
+            <button
+                type="button"
+                onClick={onOpen}
+                className={cn(
+                    "block w-full cursor-pointer overflow-hidden rounded-xl border bg-stone-100 text-left transition dark:bg-stone-900",
+                    active ? "border-stone-900 ring-1 ring-stone-900 dark:border-stone-100 dark:ring-stone-100" : "border-stone-200 hover:border-stone-400 dark:border-stone-700 dark:hover:border-stone-500",
+                )}
+            >
+                <span className="relative block">
+                    {cover ? (
+                        <img src={cover} alt={subject.name} className={cn(CARD_ASPECT, "w-full object-cover transition duration-300 group-hover:scale-[1.02]")} />
+                    ) : (
+                        <span className={cn(CARD_ASPECT, "flex w-full items-center justify-center text-2xl text-stone-400")}>{subject.name.slice(0, 1)}</span>
+                    )}
+
+                    {/* 三视图热区：悬停弹出放大预览（公共主体的图上自带三视图叠加） */}
+                    {subject.turn ? (
+                        <Popover content={turnPopover} placement="right" mouseEnterDelay={0.25} arrow={false}>
+                            <span role="presentation" className="absolute cursor-zoom-in rounded-md ring-1 ring-transparent transition hover:ring-2 hover:ring-white/70" style={TURN_HOTSPOT} />
+                        </Popover>
+                    ) : null}
+                </span>
+
+                <div className="flex items-center justify-between gap-1 px-2 py-1.5">
+                    <span className="truncate text-xs font-medium text-stone-900 dark:text-stone-100">{subject.name}</span>
+                    <span
+                        role="button"
+                        tabIndex={-1}
+                        aria-label={t("subject.star")}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            onStar();
+                        }}
+                        className="inline-flex shrink-0 items-center justify-center rounded p-0.5 transition hover:bg-stone-200 dark:hover:bg-stone-800"
+                    >
+                        <Star className={cn("size-3.5", subject.starred ? "fill-amber-400 text-amber-400" : "text-stone-400")} />
+                    </span>
+                </div>
+            </button>
         </div>
     );
 }
@@ -62,149 +82,282 @@ export function SubjectBrowser({ mode, onPicked, keyword = "" }: { mode: "manage
     const personal = useSubjectStore((state) => state.personal);
     const selectedId = useSubjectStore((state) => state.selectedId);
     const addPersonal = useSubjectStore((state) => state.addPersonal);
+    const updatePersonal = useSubjectStore((state) => state.updatePersonal);
     const removePersonal = useSubjectStore((state) => state.removePersonal);
+    const toggleStar = useSubjectStore((state) => state.toggleStar);
     const select = useSubjectStore((state) => state.select);
 
-    const [type, setType] = useState<SubjectType>("personal");
-    const [createOpen, setCreateOpen] = useState(false);
-    const [draftImage, setDraftImage] = useState("");
-    const [draftName, setDraftName] = useState("");
-    const [draftNote, setDraftNote] = useState("");
-    const fileRef = useRef<HTMLInputElement>(null);
+    const [type, setType] = useState<SubjectType>("public");
+    const [category, setCategory] = useState<SubjectCategory | "all">("all");
+    // 页面级搜索框与库内搜索框取并集：任意一个有输入都生效
+    const [localKeyword, setLocalKeyword] = useState("");
+    const effectiveKeyword = keyword.trim() || localKeyword.trim();
+    const [detail, setDetail] = useState<Subject | null>(null);
+    const [editorOpen, setEditorOpen] = useState(false);
+    const [editing, setEditing] = useState<Subject | null>(null);
+    const batchRef = useRef<HTMLInputElement>(null);
 
     const list = useMemo(() => {
         const source = type === "personal" ? personal : PUBLIC_SUBJECTS;
-        const key = keyword.trim().toLowerCase();
-        if (!key) return source;
-        return source.filter((item) => `${item.name} ${item.note}`.toLowerCase().includes(key));
-    }, [keyword, personal, type]);
+        const key = effectiveKeyword.toLowerCase();
+        return source.filter((item) => {
+            if (category !== "all" && item.category !== category) return false;
+            if (!key) return true;
+            return `${item.name} ${item.note} ${(item.tags || []).join(" ")}`.toLowerCase().includes(key);
+        });
+    }, [category, effectiveKeyword, personal, type]);
 
-    const selected = useMemo(
-        () => personal.find((item) => item.id === selectedId) ?? PUBLIC_SUBJECTS.find((item) => item.id === selectedId) ?? null,
-        [personal, selectedId],
-    );
+    const selected = useMemo(() => personal.find((item) => item.id === selectedId) ?? PUBLIC_SUBJECTS.find((item) => item.id === selectedId) ?? null, [personal, selectedId]);
+
+    const applyDraft = (draft: SubjectDraft) => {
+        if (editing) {
+            updatePersonal(editing.id, draft);
+            setDetail((prev) => (prev && prev.id === editing.id ? { ...prev, ...draft } : prev));
+            message.success(t("subject.updated"));
+        } else {
+            addPersonal({ ...draft, starred: false });
+            message.success(t("subject.created"));
+        }
+        setEditing(null);
+        setEditorOpen(false);
+    };
+
+    const handleBatch = async (files: FileList | null) => {
+        if (!files?.length) return;
+        let done = 0;
+        for (const file of Array.from(files).slice(0, 20)) {
+            if (!file.type.startsWith("image/")) continue;
+            try {
+                const dataUrl = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(String(reader.result));
+                    reader.onerror = () => reject(new Error("read failed"));
+                    reader.readAsDataURL(file);
+                });
+                if (dataUrl.length > 1_400_000) continue; // 单张过大跳过，避免撑爆 localStorage
+                addPersonal({ name: file.name.replace(/\.[^.]+$/, "").slice(0, 24), category: "character", tags: [], image: dataUrl, note: "", starred: false });
+                done++;
+            } catch {
+                /* 单张失败跳过 */
+            }
+        }
+        message.success(done ? t("subject.batchDone", { count: done }) : t("subject.batchEmpty"));
+    };
 
     const pick = (subject: Subject) => {
         select(subject.id);
         onPicked?.(subject);
+        setDetail(null);
         message.success(t("subject.selected", { name: subject.name }));
-    };
-
-    const handleFile = async (file?: File) => {
-        if (!file) return;
-        try {
-            const dataUrl = await fileToCompressedDataUrl(file);
-            setDraftImage(dataUrl);
-        } catch {
-            message.error(t("subject.imageFailed"));
-        }
-    };
-
-    const saveDraft = () => {
-        if (!draftImage) {
-            message.warning(t("subject.imageRequired"));
-            return;
-        }
-        if (!draftName.trim()) {
-            message.warning(t("subject.nameRequired"));
-            return;
-        }
-        addPersonal({ name: draftName, note: draftNote, image: draftImage });
-        setCreateOpen(false);
-        setDraftImage("");
-        setDraftName("");
-        setDraftNote("");
-        message.success(t("subject.created"));
     };
 
     return (
         <div className="w-full">
+            {/* 顶栏：分类 tab + 类别筛选 + 搜索 + 上传 */}
             <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap gap-2">
+                <div className="flex items-center gap-4">
                     {(["personal", "public"] as SubjectType[]).map((item) => (
-                        <Tag.CheckableTag key={item} checked={type === item} className={cn("prompt-filter-tag", type === item && "is-active")} onChange={() => setType(item)}>
-                            {item === "personal" ? t("subject.personal") : t("subject.public")}
-                        </Tag.CheckableTag>
+                        <button
+                            key={item}
+                            type="button"
+                            onClick={() => setType(item)}
+                            className={cn(
+                                "cursor-pointer border-b-2 pb-1 text-sm transition",
+                                type === item
+                                    ? "border-stone-900 font-medium text-stone-900 dark:border-stone-100 dark:text-stone-100"
+                                    : "border-transparent text-stone-500 hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-200",
+                            )}
+                        >
+                            {item === "personal" ? t("subject.personalAdd") : t("subject.publicSubjects")}
+                        </button>
                     ))}
                 </div>
-                {mode === "manage" && type === "personal" ? (
-                    <Button size="small" icon={<Plus className="size-3.5" />} onClick={() => setCreateOpen(true)}>
-                        {t("subject.upload")}
-                    </Button>
-                ) : null}
+
+                <div className="flex flex-wrap items-center gap-2">
+                    <Select
+                        size="small"
+                        value={category}
+                        onChange={setCategory}
+                        className="min-w-[96px]"
+                        options={[
+                            { label: t("subject.categoryAll"), value: "all" },
+                            { label: t("subject.categoryCharacter"), value: "character" },
+                            { label: t("subject.categoryScene"), value: "scene" },
+                        ]}
+                    />
+                    <Input
+                        size="small"
+                        allowClear
+                        value={localKeyword}
+                        onChange={(event) => setLocalKeyword(event.target.value)}
+                        placeholder={t("subject.searchPlaceholder")}
+                        prefix={<Search className="size-3.5 text-stone-400" />}
+                        className="w-[200px]"
+                    />
+                    {mode === "manage" ? (
+                        <>
+                            <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => batchRef.current?.click()}>
+                                {t("subject.batchUpload")}
+                            </Button>
+                            <Button
+                                size="small"
+                                type="primary"
+                                icon={<Plus className="size-3.5" />}
+                                onClick={() => {
+                                    setType("personal");
+                                    setEditing(null);
+                                    setEditorOpen(true);
+                                }}
+                            >
+                                {t("subject.upload")}
+                            </Button>
+                        </>
+                    ) : null}
+                </div>
             </div>
 
             {selected ? (
                 <div className="mt-3 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs text-stone-600 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-300">
-                    {t("subject.current", { name: selected.name })} · {selected.note}
+                    {t("subject.current", { name: selected.name })} · {selected.note || t("subject.noNote")}
                 </div>
             ) : null}
 
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-                {list.map((subject) => {
-                    const active = subject.id === selectedId;
-                    return (
-                        <div
-                            key={subject.id}
-                            className={cn(
-                                "group relative overflow-hidden rounded-xl border bg-white text-left transition dark:bg-stone-900",
-                                active ? "border-stone-900 ring-1 ring-stone-900 dark:border-stone-100 dark:ring-stone-100" : "border-stone-200 hover:border-stone-400 dark:border-stone-700 dark:hover:border-stone-500",
-                            )}
-                        >
-                            <button type="button" className="block w-full cursor-pointer" onClick={() => pick(subject)}>
-                                <SubjectAvatar subject={subject} />
-                                <div className="px-2.5 py-2">
-                                    <div className="flex items-center gap-1.5">
-                                        <span className="truncate text-xs font-medium text-stone-900 dark:text-stone-100">{subject.name}</span>
-                                        {active ? <span className="shrink-0 rounded bg-stone-900 px-1 text-[9px] leading-4 text-white dark:bg-stone-100 dark:text-stone-900">{t("subject.inUse")}</span> : null}
-                                    </div>
-                                    <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-stone-500 dark:text-stone-400">{subject.note}</p>
-                                </div>
-                            </button>
-                            {mode === "manage" && subject.type === "personal" ? (
-                                <button
-                                    type="button"
-                                    onClick={() => removePersonal(subject.id)}
-                                    aria-label={t("common.delete")}
-                                    className="absolute right-1.5 top-1.5 hidden size-6 cursor-pointer items-center justify-center rounded-md bg-black/55 text-white transition hover:bg-black/75 group-hover:flex"
-                                >
-                                    <Trash2 className="size-3.5" />
-                                </button>
-                            ) : null}
-                        </div>
-                    );
-                })}
+            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
+                {list.map((subject) => (
+                    <SubjectCard
+                        key={subject.id}
+                        subject={subject}
+                        active={subject.id === selectedId}
+                        onOpen={() => setDetail(subject)}
+                        onStar={() => {
+                            if (subject.type === "personal") toggleStar(subject.id);
+                            else message.info(t("subject.starPublicHint"));
+                        }}
+                    />
+                ))}
             </div>
 
             {!list.length ? (
-                <div className="py-14 text-center text-xs text-stone-400 dark:text-stone-500">{type === "personal" ? t("subject.personalEmpty") : t("subject.publicEmpty")}</div>
+                <div className="py-16 text-center text-xs text-stone-400 dark:text-stone-500">{type === "personal" ? t("subject.personalEmpty") : t("subject.publicEmpty")}</div>
             ) : null}
 
-            <Modal title={t("subject.uploadTitle")} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={saveDraft} okText={t("common.save")} cancelText={t("common.cancel")} destroyOnHidden>
-                <div className="flex flex-col gap-3 pt-1">
-                    <div className="flex items-center gap-3">
-                        <div className="size-20 shrink-0 overflow-hidden rounded-lg border border-dashed border-stone-300 dark:border-stone-700">
-                            {draftImage ? <img src={draftImage} alt="" className="size-full object-cover" /> : null}
+            {/* 详情：左大图 + 右信息（对照参考站） */}
+            <Modal open={Boolean(detail)} onCancel={() => setDetail(null)} footer={null} width={980} destroyOnHidden className="subject-detail-modal" closeIcon={false}>
+                {detail ? (
+                    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+                        <div className="overflow-hidden rounded-xl bg-stone-100 dark:bg-stone-900">
+                            <img src={detail.hero || detail.image} alt={detail.name} className="aspect-[203/176] w-full object-cover" />
                         </div>
-                        <Button icon={<Upload className="size-4" />} onClick={() => fileRef.current?.click()}>
-                            {t("subject.pickImage")}
-                        </Button>
+
+                        <div className="flex min-h-0 flex-col">
+                            <div className="flex items-start justify-between gap-3">
+                                <h3 className="text-base font-semibold text-stone-900 dark:text-stone-100">{detail.name}</h3>
+                                <div className="flex items-center gap-1">
+                                    <Tooltip title={t("subject.star")}>
+                                        <button
+                                            type="button"
+                                            onClick={() => (detail.type === "personal" ? toggleStar(detail.id) : message.info(t("subject.starPublicHint")))}
+                                            className="cursor-pointer rounded p-1 transition hover:bg-stone-100 dark:hover:bg-stone-800"
+                                        >
+                                            <Star className={cn("size-4", detail.starred ? "fill-amber-400 text-amber-400" : "text-stone-400")} />
+                                        </button>
+                                    </Tooltip>
+                                    <button
+                                        type="button"
+                                        onClick={() => setDetail(null)}
+                                        aria-label={t("common.close")}
+                                        className="cursor-pointer rounded p-1 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700 dark:hover:bg-stone-800"
+                                    >
+                                        ✕
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="mt-3 flex items-center justify-between gap-2 text-xs">
+                                <span className="text-stone-500 dark:text-stone-400">{t("subject.category")}</span>
+                                <span className="text-stone-800 dark:text-stone-200">{detail.category === "scene" ? t("subject.categoryScene") : t("subject.categoryCharacter")}</span>
+                            </div>
+
+                            <div className="mt-4">
+                                <div className="mb-1.5 text-xs font-medium text-stone-700 dark:text-stone-300">{t("subject.description")}</div>
+                                <p className="text-xs leading-6 text-stone-600 dark:text-stone-300">{detail.note || t("subject.noNote")}</p>
+                                <p className="mt-1.5 text-[11px] text-stone-400">{detail.type === "public" ? t("subject.aiGenerated") : t("subject.userProvided")}</p>
+                            </div>
+
+                            <div className="mt-4">
+                                <div className="mb-1.5 text-xs font-medium text-stone-700 dark:text-stone-300">{t("subject.turnAround")}</div>
+                                {detail.turn ? (
+                                    <Popover content={<img src={detail.turn} alt="" className="w-[360px] rounded-md" />} placement="left" mouseEnterDelay={0.2} arrow={false}>
+                                        <img src={detail.turn} alt={t("subject.turnAround")} className="w-full cursor-zoom-in rounded-lg bg-stone-100 transition hover:opacity-90 dark:bg-stone-900" />
+                                    </Popover>
+                                ) : (
+                                    <div className="rounded-lg border border-dashed border-stone-200 px-3 py-6 text-center text-[11px] text-stone-400 dark:border-stone-700">{t("subject.noTurnAround")}</div>
+                                )}
+                            </div>
+
+                            {detail.tags?.length ? (
+                                <div className="mt-4 flex flex-wrap gap-1.5">
+                                    {detail.tags.map((tag) => (
+                                        <Tag key={tag} className="m-0 text-[11px]">
+                                            {tag}
+                                        </Tag>
+                                    ))}
+                                </div>
+                            ) : null}
+
+                            <div className="mt-auto flex items-center gap-2 pt-6">
+                                <Button type="primary" block onClick={() => pick(detail)}>
+                                    ✦ {t("subject.useToCreate")}
+                                </Button>
+                                {detail.type === "personal" && mode === "manage" ? (
+                                    <>
+                                        <Button
+                                            icon={<Pencil className="size-3.5" />}
+                                            onClick={() => {
+                                                setEditing(detail);
+                                                setEditorOpen(true);
+                                            }}
+                                        >
+                                            {t("common.edit")}
+                                        </Button>
+                                        <Button
+                                            danger
+                                            icon={<Trash2 className="size-3.5" />}
+                                            aria-label={t("common.delete")}
+                                            onClick={() => {
+                                                removePersonal(detail.id);
+                                                setDetail(null);
+                                            }}
+                                        />
+                                    </>
+                                ) : null}
+                            </div>
+                        </div>
                     </div>
-                    <Input placeholder={t("subject.namePlaceholder")} value={draftName} onChange={(event) => setDraftName(event.target.value)} maxLength={24} />
-                    <Input.TextArea rows={3} placeholder={t("subject.notePlaceholder")} value={draftNote} onChange={(event) => setDraftNote(event.target.value)} maxLength={160} />
-                    <p className="text-[11px] leading-5 text-stone-400">{t("subject.noteHint")}</p>
-                </div>
-                <input
-                    ref={fileRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(event) => {
-                        void handleFile(event.target.files?.[0]);
-                        event.target.value = "";
-                    }}
-                />
+                ) : null}
             </Modal>
+
+            <SubjectEditorModal
+                open={editorOpen}
+                initial={editing}
+                onClose={() => {
+                    setEditorOpen(false);
+                    setEditing(null);
+                }}
+                onSubmit={applyDraft}
+            />
+
+            <input
+                ref={batchRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                    void handleBatch(event.target.files);
+                    event.target.value = "";
+                }}
+            />
         </div>
     );
 }

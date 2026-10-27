@@ -206,24 +206,27 @@ export default function AssetsPage() {
                         <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">{t("assets.description")}</p>
                     </div>
 
-                    <div className="mx-auto mt-8 w-full max-w-2xl">
-                        <Input.Search
-                            className="w-full"
-                            size="large"
-                            allowClear
-                            prefix={<Search className="size-4 text-stone-400" />}
-                            value={keyword}
-                            placeholder={t("assets.search")}
-                            onChange={(event) => {
-                                setPage(1);
-                                setKeyword(event.target.value);
-                            }}
-                            onSearch={(value) => {
-                                setPage(1);
-                                setKeyword(value);
-                            }}
-                        />
-                    </div>
+                    {/* 主体视图下由主体库自己的搜索框负责，避免两个搜索框并存 */}
+                    {kindFilter !== "subject" ? (
+                        <div className="mx-auto mt-8 w-full max-w-2xl">
+                            <Input.Search
+                                className="w-full"
+                                size="large"
+                                allowClear
+                                prefix={<Search className="size-4 text-stone-400" />}
+                                value={keyword}
+                                placeholder={t("assets.search")}
+                                onChange={(event) => {
+                                    setPage(1);
+                                    setKeyword(event.target.value);
+                                }}
+                                onSearch={(value) => {
+                                    setPage(1);
+                                    setKeyword(value);
+                                }}
+                            />
+                        </div>
+                    ) : null}
 
                     <div className="mx-auto mt-6 grid max-w-6xl gap-3 text-left">
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -246,27 +249,32 @@ export default function AssetsPage() {
                                 </div>
                             </div>
                             <div className="flex flex-wrap gap-4">
-                                <button
-                                    type="button"
-                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
-                                    onClick={() => void exportAllAssets()}
-                                >
-                                    {t("assets.export")}
-                                </button>
-                                <button
-                                    type="button"
-                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
-                                    onClick={() => assetInputRef.current?.click()}
-                                >
-                                    {t("assets.import")}
-                                </button>
-                                <button
-                                    type="button"
-                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
-                                    onClick={openCreate}
-                                >
-                                    {t("assets.add")}
-                                </button>
+                                {/* 主体库有自己的上传 / 批量上传入口，资产导出导入不适用于主体 */}
+                                {kindFilter !== "subject" ? (
+                                    <>
+                                        <button
+                                            type="button"
+                                            className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                            onClick={() => void exportAllAssets()}
+                                        >
+                                            {t("assets.export")}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                            onClick={() => assetInputRef.current?.click()}
+                                        >
+                                            {t("assets.import")}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                            onClick={openCreate}
+                                        >
+                                            {t("assets.add")}
+                                        </button>
+                                    </>
+                                ) : null}
                             </div>
                         </div>
                     </div>

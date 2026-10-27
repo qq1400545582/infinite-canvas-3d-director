@@ -12,7 +12,7 @@ import { navigationTools } from "@/constant/navigation-tools";
 import { cn } from "@/lib/utils";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useConfigStore } from "@/stores/use-config-store";
-import { PUBLIC_SUBJECTS, useSubjectStore } from "@/stores/use-subject-store";
+import { resolveSubject, useSubjectStore } from "@/stores/use-subject-store";
 
 /**
  * 首页灵感输入框（对齐参考站 composer 的入口与交互）。
@@ -78,10 +78,7 @@ export function HomeComposer() {
     const selectedSubjectId = useSubjectStore((state) => state.selectedId);
     const personalSubjects = useSubjectStore((state) => state.personal);
     const select = useSubjectStore((state) => state.select);
-    const subject = useMemo(
-        () => personalSubjects.find((item) => item.id === selectedSubjectId) ?? PUBLIC_SUBJECTS.find((item) => item.id === selectedSubjectId) ?? null,
-        [personalSubjects, selectedSubjectId],
-    );
+    const subject = useMemo(() => resolveSubject(selectedSubjectId, personalSubjects), [personalSubjects, selectedSubjectId]);
     const subjectLabel = subject ? subject.name : t("home.composer.subjectAsset");
 
     const model = useMemo(() => {

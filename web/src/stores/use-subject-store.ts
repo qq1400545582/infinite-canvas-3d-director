@@ -4,45 +4,72 @@ import { persist } from "zustand/middleware";
 /**
  * 主体库（Subject Library）
  *
- * 用途：在创作任务开始前选定「主体」，并在后续整个任务中保持一致。
- * - 个人主体：用户自己上传（图片压缩后以 dataURL 存在 localStorage，避免污染资产 IndexedDB）。
- * - 公共主体：系统内置的静态目录，不可编辑、不可删除。
+ * - 个人主体：用户上传 / 编辑，形象图压缩成 256px 的 dataURL 存 localStorage。
+ * - 公共主体：系统内置（形象图 + 三视图从公共主体列表截图裁切而来，放在 web/public/subjects/）。
  *
- * 独立存储的原因：资产库的 Asset 模型只有 text/image/video 三种 kind，
- * 直接加第四种会波及资产页以外的所有消费方；主体库自成一套数据，两边互不影响。
+ * 两种主体共用一套字段，因此列表、详情、选择逻辑只有一份实现。
+ * 独立于资产库：资产页的 Asset 模型只认 text/image/video，主体库自成一套数据，互不影响。
  */
 
 export type SubjectType = "personal" | "public";
+export type SubjectCategory = "character" | "scene";
 
 export type Subject = {
     id: string;
     name: string;
     type: SubjectType;
-    /** 主体形象：个人主体为用户上传的 dataURL；公共主体为空时用首字头像 */
+    category: SubjectCategory;
+    /** 列表卡片形象图（公共主体自带三视图叠加，与参考站一致） */
     image?: string;
-    /** 一致性描述：身份 / 外观 / 服装，发送时随提示词一起带出，保证前后一致 */
+    /** 详情页大图（无三视图叠加） */
+    hero?: string;
+    /** 三视图（正面 / 侧面 / 背面） */
+    turn?: string;
+    /** 一致性描述：身份 / 外观 / 服装，随任务带出 */
     note: string;
+    tags: string[];
+    /** 音色（仅记录文件名，不参与生成） */
+    voice?: string;
+    starred?: boolean;
     createdAt: number;
 };
 
-/** 内置公共主体：本地没有形象素材，用首字头像呈现，描述保证跨任务一致。 */
+const img = (id: string) => `/subjects/${id}.jpg`;
+const heroImg = (id: string) => `/subjects/${id}-hero.jpg`;
+const turnImg = (id: string) => `/subjects/${id}-turn.jpg`;
+
+function pub(id: string, name: string, note: string, tags: string[]): Subject {
+    return { id: `public-${id}`, name, type: "public", category: "character", image: img(id), hero: heroImg(id), turn: turnImg(id), note, tags, createdAt: 0 };
+}
+
+/** 内置公共主体（顺序即截图里的排列）。 */
 export const PUBLIC_SUBJECTS: Subject[] = [
-    { id: "public-linchuan", name: "林川", type: "public", note: "27 岁男性，短黑发，深灰色长风衣，轮廓硬朗，眼神克制", createdAt: 0 },
-    { id: "public-suwan", name: "苏晚", type: "public", note: "25 岁女性，黑色长直发，米白色针织衫，气质清冷，妆容干净", createdAt: 0 },
-    { id: "public-ache", name: "阿澈", type: "public", note: "16 岁少年，蓬松短发，深蓝校服外套，眼神明亮，身形清瘦", createdAt: 0 },
-    { id: "public-qinghe", name: "清和", type: "public", note: "18 岁少女，及肩黑发，浅蓝连衣裙，神态安静，皮肤白皙", createdAt: 0 },
-    { id: "public-chenbo", name: "陈伯", type: "public", note: "60 岁男性，花白短发，藏青色夹克，面容温和，背略驼", createdAt: 0 },
-    { id: "public-moya", name: "墨鸦", type: "public", note: "30 岁男性，黑色长发束起，深色立领唐装，气质阴郁，左眉有疤", createdAt: 0 },
-    { id: "public-tuanzi", name: "团子", type: "public", note: "白色短毛猫，圆脸，琥珀色眼睛，尾巴蓬松，体态圆润", createdAt: 0 },
-    { id: "public-narrator", name: "叙述者", type: "public", note: "无固定形象，仅以画外旁白出现，声音低沉平稳", createdAt: 0 },
+    pub(
+        "blonde-lady",
+        "金发女郎",
+        "年轻女性，白人，复古波浪短卷发，浅金色，面带微笑，五官柔和立体，绿色眼睛，穿浅米色底色配粉色小碎花短袖泡泡袖衬衫，高腰鹅黄色百褶长裙",
+        ["复古", "女性", "写实"],
+    ),
+    pub("classic-gentleman", "古典绅士", "中年男性，深棕色背头，轮廓分明，穿米色西装三件套配深色领带，外搭深灰大衣，气质沉稳", ["复古", "男性", "正装"]),
+    pub("cowboy", "沉着牛仔", "成年男性，棕色宽檐帽，蓄短须，穿白色衬衫配背带，深色长裤，神态放松", ["西部", "男性"]),
+    pub("singer", "魅力歌手", "成年男性，深色卷发，穿白色西装外套内搭印花衬衫，笑容自信，舞台气质", ["男性", "舞台"]),
+    pub("punk-youth", "朋克青年", "青年男性，黑色长卷发，戴墨镜，穿深灰做旧夹克，内搭印花 T 恤，气质反叛", ["潮流", "男性"]),
+    pub("retro-girl", "复古少女", "年轻女性，金色短卷发，戴头戴式耳机，穿棕色短夹克配格纹围巾", ["复古", "女性"]),
+    pub("young-clerk", "年轻职员", "青年男性，金色短发，穿黑色西装配白衬衫黑领带，站姿端正", ["职场", "男性"]),
+    pub("blonde-clerk", "金发职员", "年轻女性，金色盘发，戴细框眼镜，抱白色文件夹，穿黑色西装套裙", ["职场", "女性"]),
+    pub("executive", "高级主管", "中年男性，灰白短发，戴黑框眼镜，穿深蓝西装配红色领带，神情严肃", ["职场", "男性"]),
+    pub("paladin", "圣骑士", "成年男性，金色卷发，穿银白色全身板甲，肩甲带狮首纹样，背负长盾", ["奇幻", "男性"]),
+    pub("arcanist", "奥术术士", "中老年男性，灰白长发，穿紫色长袍配深紫披风，手持法杖，杖顶镶蓝色晶石", ["奇幻", "男性"]),
+    pub("elf-ranger", "精灵游侠", "成年女性，银白长发，尖耳，穿绿色斗篷与皮质护甲，背负长弓", ["奇幻", "女性"]),
 ];
 
 type SubjectStore = {
     personal: Subject[];
-    /** 当前任务使用的主体（持久化，保证跨任务、跨页面一致） */
     selectedId: string | null;
-    addPersonal: (input: { name: string; note: string; image: string }) => Subject;
+    addPersonal: (input: Omit<Subject, "id" | "type" | "createdAt">) => Subject;
+    updatePersonal: (id: string, patch: Partial<Omit<Subject, "id" | "type">>) => void;
     removePersonal: (id: string) => void;
+    toggleStar: (id: string) => void;
     select: (id: string | null) => void;
 };
 
@@ -55,25 +82,27 @@ export const useSubjectStore = create<SubjectStore>()(
         (set) => ({
             personal: [],
             selectedId: null,
-            addPersonal: ({ name, note, image }) => {
-                const subject: Subject = { id: newId(), name: name.trim(), type: "personal", image, note: note.trim(), createdAt: Date.now() };
-                set((state) => ({ personal: [subject, ...state.personal], selectedId: subject.id }));
+            addPersonal: (input) => {
+                const subject: Subject = { ...input, id: newId(), type: "personal", createdAt: Date.now() };
+                set((state) => ({ personal: [subject, ...state.personal] }));
                 return subject;
             },
+            updatePersonal: (id, patch) =>
+                set((state) => ({ personal: state.personal.map((item) => (item.id === id ? { ...item, ...patch } : item)) })),
             removePersonal: (id) =>
                 set((state) => ({
                     personal: state.personal.filter((item) => item.id !== id),
                     selectedId: state.selectedId === id ? null : state.selectedId,
                 })),
+            toggleStar: (id) => set((state) => ({ personal: state.personal.map((item) => (item.id === id ? { ...item, starred: !item.starred } : item)) })),
             select: (id) => set({ selectedId: id }),
         }),
         { name: "infinite-canvas:subject_store" },
     ),
 );
 
-/** 公共主体 + 个人主体合并查找（用于把 selectedId 还原成对象）。 */
-export function findSubject(id: string | null): Subject | null {
+/** 按 id 找主体（个人优先，其次公共）。 */
+export function resolveSubject(id: string | null, personal: Subject[]): Subject | null {
     if (!id) return null;
-    const personal = useSubjectStore.getState().personal;
     return personal.find((item) => item.id === id) ?? PUBLIC_SUBJECTS.find((item) => item.id === id) ?? null;
 }
