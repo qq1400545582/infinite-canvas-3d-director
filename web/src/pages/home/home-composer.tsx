@@ -1,38 +1,45 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { App, Dropdown, Tooltip } from "antd";
-import { ArrowUp, LayoutGrid, Plus, Sparkles } from "lucide-react";
+import { App, Dropdown, Popover, Switch, Tooltip } from "antd";
+import { ArrowUp, AtSign, Clapperboard, LayoutGrid, Palette, Plus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
+import { AssetPickerModal } from "@/components/canvas/asset-picker-modal";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
+import { HomeSkillPicker } from "@/pages/home/home-skill-picker";
 import { navigationTools } from "@/constant/navigation-tools";
 import { cn } from "@/lib/utils";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { useConfigStore } from "@/stores/use-config-store";
 
 /**
- * 首页灵感输入框 —— 按参考站（Seko）composer 的结构复刻入口与交互：
+ * 首页灵感输入框（对齐参考站 composer 的入口与交互）。
  *
- *   ① 顶部 tab     —— 参考站是「短片工作室 / 创作 Agent」；这里是 画布 / 生图 / 视频 + Agent
- *                     （前三个决定发送去哪，Agent 直接打开右侧 Agent 面板）
- *   ② 输入区       —— placeholder 用「输入“/”+ 名称引用」语法
- *   ③ 输入 “/”     —— 打开提示词选择器，选中即插入（对应参考站的 Skill 引用）
- *   ④ 左下 “+”     —— 菜单两项：上传附件（读文本文件填入）/ 从「我的资产」选择
- *   ⑤ 左下 四宫格   —— 打开提示词选择器（对应参考站的「选择 Skill」）
- *   ⑥ 模型名       —— 显示当前工作台默认模型，点击打开配置（对应「选择模型」）
- *   ⑦ 右下圆钮     —— 有内容才可点：复制提示词并跳转工作台
- *   ⑧ 卡片下方胶囊  —— 4 条灵感 + 「更多 技能 →」跳提示词库
- *
- * 所有入口都接本项目真实能力，没有点了没反应的装饰按钮。
+ * 入口一览（全部接真实能力）：
+ *   ① tab：我的画布 / 生图工作台 / 视频创作台 / 短剧工作室，决定发送去哪；Agent 打开右侧面板
+ *   ② 输入区：placeholder 用「输入“/”+ 提示词名称可引用」
+ *   ③ 输入 “/”：打开提示词选择器并插入
+ *   ④ “+”：上传附件（文本文件）/ 从我的资产选择
+ *   ⑤ 四宫格：提示词选择器（选择 Skill）
+ *   ⑥ 模型名：当前工作台默认模型，点击开配置
+ *   ⑦ 风格库：点选风格词追加到提示词
+ *   ⑧ 多集：开启后以「多集连载」方式新建画布（/canvas?mode=new）
+ *   ⑨ @ 主体资产：从我的资产挑文本素材插入
+ *   ⑩ 发送：复制提示词并跳转
+ *   ⑪ 胶囊 + 更多技能：更多技能打开专家/技能选择器，选中即把 @名称 写进输入框
  */
 
 const TARGETS = [
-    { slug: "canvas", modelKey: "textModel" },
-    { slug: "image", modelKey: "imageModel" },
-    { slug: "video", modelKey: "videoModel" },
+    { slug: "canvas", modelKey: "textModel", to: "/canvas" },
+    { slug: "image", modelKey: "imageModel", to: "/image" },
+    { slug: "video", modelKey: "videoModel", to: "/video" },
+    { slug: "drama", modelKey: "textModel", to: "/canvas?mode=new" },
 ] as const;
 
 type TargetSlug = (typeof TARGETS)[number]["slug"];
+
+/** 多集连载：走画布新建（分集更适合在画布上铺开），没有独立路由。 */
+const MULTI_TO = "/canvas?mode=new";
 
 /** 渠道模型值是 `<channelId>::<modelName>` 编码，展示时只取名字部分。 */
 function modelLabel(value: string): string {
@@ -53,6 +60,9 @@ export function HomeComposer() {
     const [target, setTarget] = useState<TargetSlug>("canvas");
     const [value, setValue] = useState("");
     const [skillOpen, setSkillOpen] = useState(false);
+    const [expertOpen, setExpertOpen] = useState(false);
+    const [assetOpen, setAssetOpen] = useState(false);
+    const [multiEpisode, setMultiEpisode] = useState(false);
     const fileRef = useRef<HTMLInputElement>(null);
     const textModel = useConfigStore((state) => state.config.textModel);
     const imageModel = useConfigStore((state) => state.config.imageModel);
@@ -61,16 +71,22 @@ export function HomeComposer() {
     const togglePanel = useAgentStore((state) => state.togglePanel);
 
     const model = useMemo(() => {
-        const map: Record<TargetSlug, string> = { canvas: textModel, image: imageModel, video: videoModel };
+        const map: Record<TargetSlug, string> = { canvas: textModel, image: imageModel, video: videoModel, drama: textModel };
         return modelLabel(map[target] || "");
     }, [imageModel, target, textModel, videoModel]);
 
     const ideas = useMemo(() => [t("home.composer.idea1"), t("home.composer.idea2"), t("home.composer.idea3"), t("home.composer.idea4")], [t]);
+    const styles = useMemo(() => t("home.composer.styleList").split(",").map((item) => item.trim()).filter(Boolean), [t]);
     const canSend = Boolean(value.trim());
+
+    const append = useCallback((text: string) => {
+        setValue((prev) => (prev ? `${prev}${/[，,、\s]$/.test(prev) ? "" : "，"}${text}` : text));
+    }, []);
 
     const submit = useCallback(async () => {
         const text = value.trim();
         if (!text) return;
+        const destination = multiEpisode ? MULTI_TO : TARGETS.find((item) => item.slug === target)!.to;
         // 非安全上下文（局域网 IP 访问）下 clipboard 不可用 → 静默跳过，不阻断跳转。
         try {
             await navigator.clipboard.writeText(text);
@@ -78,8 +94,8 @@ export function HomeComposer() {
         } catch {
             /* 无剪贴板权限时只做跳转 */
         }
-        navigate(`/${target}`);
-    }, [message, navigate, t, target, value]);
+        navigate(destination);
+    }, [message, multiEpisode, navigate, t, target, value]);
 
     /** 输入 “/” 即引用提示词（对应参考站的 Skill 引用语法）。 */
     const handleChange = useCallback((next: string) => {
@@ -91,6 +107,11 @@ export function HomeComposer() {
     const insertPrompt = useCallback((prompt: string) => {
         // 引用时把触发用的 “/” 去掉，避免残留
         setValue((prev) => (prev.endsWith("/") ? prev.slice(0, -1) + prompt : prev ? `${prev}\n${prompt}` : prompt));
+    }, []);
+
+    /** 选中专家/技能 → 以 `@名称` 的形式写进输入框，可在提示词里直接引用。 */
+    const insertExpert = useCallback((name: string) => {
+        setValue((prev) => (prev ? `${prev}${/\s$/.test(prev) ? "" : " "}@${name}` : `@${name}`));
     }, []);
 
     const handleFile = useCallback(
@@ -122,15 +143,29 @@ export function HomeComposer() {
         },
     };
 
+    const styleContent = (
+        <div className="grid max-w-[220px] grid-cols-2 gap-1">
+            {styles.map((style) => (
+                <button
+                    key={style}
+                    type="button"
+                    onClick={() => append(style)}
+                    className="cursor-pointer rounded-md px-2 py-1 text-left text-xs text-stone-600 transition hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800"
+                >
+                    {style}
+                </button>
+            ))}
+        </div>
+    );
+
     return (
         <div className="w-full">
             <div className="rounded-2xl border border-white/10 bg-white/[0.055] p-2.5 shadow-[0_30px_90px_-30px_rgba(0,0,0,0.95)] backdrop-blur-2xl">
-                {/* ① 目标切换（对应参考站顶部 tab） */}
+                {/* ① 目标切换 + Agent */}
                 <div className="hide-scrollbar flex items-center gap-1 overflow-x-auto px-0.5">
                     {TARGETS.map((item) => {
-                        const tool = navigationTools.find((entry) => entry.slug === item.slug);
-                        const Icon = tool?.icon;
                         const active = item.slug === target;
+                        const Icon = item.slug === "drama" ? Clapperboard : navigationTools.find((entry) => entry.slug === item.slug)?.icon;
                         return (
                             <button
                                 key={item.slug}
@@ -142,7 +177,7 @@ export function HomeComposer() {
                                 )}
                             >
                                 {Icon ? <Icon className="size-3.5" /> : null}
-                                {t(`navigation.${item.slug}`)}
+                                {item.slug === "drama" ? t("home.composer.drama") : t(`navigation.${item.slug}`)}
                             </button>
                         );
                     })}
@@ -156,7 +191,7 @@ export function HomeComposer() {
                     </button>
                 </div>
 
-                {/* ②④⑤⑥⑦ 输入区 + 工具行 */}
+                {/* ② 输入区 */}
                 <div className="mt-1.5 rounded-xl bg-black/25 p-2">
                     <textarea
                         value={value}
@@ -173,7 +208,7 @@ export function HomeComposer() {
                         className="w-full resize-none bg-transparent px-1.5 py-1 text-[13px] leading-6 text-white outline-none placeholder:text-white/30"
                     />
 
-                    <div className="flex items-center justify-between gap-2 px-0.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-0.5">
                         <div className="flex min-w-0 items-center gap-0.5">
                             {/* ④ “+”：上传附件 / 从我的资产选择 */}
                             <Dropdown menu={plusMenu} trigger={["click"]} placement="topLeft">
@@ -203,46 +238,79 @@ export function HomeComposer() {
                                 type="button"
                                 onClick={() => openConfigDialog(false, "channels")}
                                 title={t("home.composer.selectModel")}
-                                className="max-w-[42%] cursor-pointer truncate rounded-lg px-1.5 py-1 text-[11px] text-white/40 transition hover:bg-white/10 hover:text-white/80"
+                                className="max-w-[38%] cursor-pointer truncate rounded-lg px-1.5 py-1 text-[11px] text-white/40 transition hover:bg-white/10 hover:text-white/80"
                             >
                                 {model || t("home.composer.modelUnset")}
                             </button>
                         </div>
 
-                        {/* ⑦ 发送 */}
-                        <button
-                            type="button"
-                            onClick={() => void submit()}
-                            disabled={!canSend}
-                            aria-label={t("home.composer.send")}
-                            className={cn(
-                                "inline-flex size-8 shrink-0 items-center justify-center rounded-full transition",
-                                canSend ? "cursor-pointer bg-white text-stone-900 hover:bg-white/90" : "cursor-not-allowed bg-white/15 text-white/40",
-                            )}
-                        >
-                            <ArrowUp className="size-4" />
-                        </button>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                            {/* ⑦ 风格库 */}
+                            <Popover content={styleContent} trigger="click" placement="topRight">
+                                <button
+                                    type="button"
+                                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-white/50 transition hover:bg-white/10 hover:text-white"
+                                >
+                                    <Palette className="size-3.5" />
+                                    {t("home.composer.styleLibrary")}
+                                </button>
+                            </Popover>
+
+                            {/* ⑧ 多集 */}
+                            <Tooltip title={t("home.composer.multiEpisodeHint")} placement="top" mouseEnterDelay={0.2}>
+                                <label className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-1 py-1 text-[11px] text-white/50 transition hover:text-white/80">
+                                    <Switch size="small" checked={multiEpisode} onChange={setMultiEpisode} aria-label={t("home.composer.multiEpisode")} />
+                                    {t("home.composer.multiEpisode")}
+                                </label>
+                            </Tooltip>
+
+                            {/* ⑨ @ 主体资产 */}
+                            <Tooltip title={t("home.composer.subjectAssetHint")} placement="top" mouseEnterDelay={0.2}>
+                                <button
+                                    type="button"
+                                    onClick={() => setAssetOpen(true)}
+                                    className="inline-flex cursor-pointer items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] text-white/50 transition hover:bg-white/10 hover:text-white"
+                                >
+                                    <AtSign className="size-3.5" />
+                                    {t("home.composer.subjectAsset")}
+                                </button>
+                            </Tooltip>
+
+                            {/* ⑩ 发送 */}
+                            <button
+                                type="button"
+                                onClick={() => void submit()}
+                                disabled={!canSend}
+                                aria-label={t("home.composer.send")}
+                                className={cn(
+                                    "inline-flex size-8 shrink-0 items-center justify-center rounded-full transition",
+                                    canSend ? "cursor-pointer bg-white text-stone-900 hover:bg-white/90" : "cursor-not-allowed bg-white/15 text-white/40",
+                                )}
+                            >
+                                <ArrowUp className="size-4" />
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            {/* ⑧ 技能 / 灵感胶囊（对应参考站卡片下方那一排） */}
+            {/* ⑪ 技能 / 灵感胶囊 */}
             <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5 px-1">
                 {ideas.map((idea) => (
                     <button
                         key={idea}
                         type="button"
                         onClick={() => setValue(idea)}
-                        className="inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[11px] text-white/60 transition hover:border-white/20 hover:bg-white/10 hover:text-white"
+                        className="inline-flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[11px] text-white/60 transition hover:border-white/20 hover:bg-white/10 hover:text-white"
                     >
-                        <Sparkles className="size-3 shrink-0 text-white/40" />
+                        <span className="size-1 shrink-0 rounded-full bg-white/30" />
                         {idea}
                     </button>
                 ))}
                 <button
                     type="button"
-                    onClick={() => navigate("/prompts")}
-                    className="inline-flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[11px] text-white/45 transition hover:border-white/20 hover:bg-white/10 hover:text-white"
+                    onClick={() => setExpertOpen(true)}
+                    className="inline-flex shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[11px] text-white/45 transition hover:border-white/20 hover:bg-white/10 hover:text-white"
                 >
                     {t("home.composer.moreSkills")}
                     <span aria-hidden>→</span>
@@ -262,6 +330,22 @@ export function HomeComposer() {
             />
 
             <PromptSelectDialog open={skillOpen} onOpenChange={setSkillOpen} onSelect={insertPrompt} />
+
+            <HomeSkillPicker open={expertOpen} onOpenChange={setExpertOpen} onSelect={insertExpert} />
+
+            <AssetPickerModal
+                open={assetOpen}
+                onClose={() => setAssetOpen(false)}
+                onInsert={(payload) => {
+                    setAssetOpen(false);
+                    if (payload.kind === "text") {
+                        setValue((prev) => (prev ? `${prev}\n${payload.content}` : payload.content));
+                        return;
+                    }
+                    // 首页没有参考图挂载点：如实告知，而不是静默失败。
+                    message.info(t("home.composer.assetMediaUnsupported"));
+                }}
+            />
         </div>
     );
 }
