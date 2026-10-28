@@ -17,15 +17,12 @@ import { PUBLIC_SUBJECTS, publicSubjectList, useSubjectStore, type Subject, type
 
 const CARD_ASPECT = "aspect-[203/238]";
 
-/** 三视图热区（相对卡片图的百分比，与裁切坐标一致） */
-const TURN_HOTSPOT = { left: "4.9%", top: "81.1%", width: "65.5%", height: "18.9%" };
-
 function SubjectCard({ subject, active, onOpen, onStar }: { subject: Subject; active: boolean; onOpen: () => void; onStar: () => void }) {
     const { t } = useTranslation();
     const cover = subject.image;
 
     const turnPopover = subject.turn ? (
-        <div className="w-[320px]">
+        <div className="w-[520px]">
             <img src={subject.turn} alt={t("subject.turnAround")} className="w-full rounded-md" />
             <div className="mt-1.5 text-center text-[11px] text-stone-400">{t("subject.turnAround")}</div>
         </div>
@@ -48,10 +45,15 @@ function SubjectCard({ subject, active, onOpen, onStar }: { subject: Subject; ac
                         <span className={cn(CARD_ASPECT, "flex w-full items-center justify-center text-2xl text-stone-400")}>{subject.name.slice(0, 1)}</span>
                     )}
 
-                    {/* 三视图热区：悬停弹出放大预览（公共主体的图上自带三视图叠加） */}
+                    {/* 三视图：独立叠一层（不烤进卡片图），缩放时始终从超清原图取样，任何 DPR 下都清晰 */}
                     {subject.turn ? (
                         <Popover content={turnPopover} placement="right" mouseEnterDelay={0.25} arrow={false}>
-                            <span role="presentation" className="absolute cursor-zoom-in rounded-md ring-1 ring-transparent transition hover:ring-2 hover:ring-white/70" style={TURN_HOTSPOT} />
+                            <span
+                                role="presentation"
+                                className="absolute bottom-[4.5%] left-[4.5%] w-[64%] cursor-zoom-in overflow-hidden rounded-md bg-white/95 p-[2px] shadow-[0_2px_10px_rgba(0,0,0,0.22)] ring-1 ring-black/10 transition hover:ring-2 hover:ring-white"
+                            >
+                                <img src={subject.turn} alt={t("subject.turnAround")} loading="lazy" className="block w-full rounded-[4px]" />
+                            </span>
                         </Popover>
                     ) : null}
                 </span>
@@ -290,7 +292,7 @@ export function SubjectBrowser({ mode, onPicked, keyword = "" }: { mode: "manage
                             <div className="mt-4">
                                 <div className="mb-1.5 text-xs font-medium text-stone-700 dark:text-stone-300">{t("subject.turnAround")}</div>
                                 {detail.turn ? (
-                                    <Popover content={<img src={detail.turn} alt="" className="w-[360px] rounded-md" />} placement="left" mouseEnterDelay={0.2} arrow={false}>
+                                    <Popover content={<img src={detail.turn} alt="" className="w-[720px] rounded-md" />} placement="left" mouseEnterDelay={0.2} arrow={false}>
                                         <img src={detail.turn} alt={t("subject.turnAround")} className="w-full cursor-zoom-in rounded-lg bg-stone-100 transition hover:opacity-90 dark:bg-stone-900" />
                                     </Popover>
                                 ) : (

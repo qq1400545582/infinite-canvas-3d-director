@@ -5,7 +5,7 @@ import { persist } from "zustand/middleware";
  * 主体库（Subject Library）
  *
  * - 个人主体：用户上传 / 编辑，形象图压缩成 256px 的 dataURL 存 localStorage。
- * - 公共主体：系统内置（形象图 + 三视图从公共主体列表截图裁切而来，放在 web/public/subjects/）。
+ * - 公共主体：系统内置（形象图 + 三视图均为 1200px 级超清图，放在 web/public/subjects/）。
  *
  * 两种主体共用一套字段，因此列表、详情、选择逻辑只有一份实现。
  * 独立于资产库：资产页的 Asset 模型只认 text/image/video，主体库自成一套数据，互不影响。
@@ -23,7 +23,7 @@ export type Subject = {
     category: SubjectCategory;
     /** 上传主体时指定：private 只在「个人添加」里，public 同时出现在「公共主体」 */
     visibility: SubjectVisibility;
-    /** 列表卡片形象图（公共主体自带三视图叠加，与参考站一致） */
+    /** 列表卡片形象图（纯人像；三视图由卡片单独叠加，见 subject-browser） */
     image?: string;
     /** 详情页大图（无三视图叠加） */
     hero?: string;
