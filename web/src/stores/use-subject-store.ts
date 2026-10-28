@@ -27,7 +27,7 @@ export type Subject = {
     image?: string;
     /** 详情页大图（无三视图叠加） */
     hero?: string;
-    /** 三视图（正面 / 侧面 / 背面） */
+    /** 角色设定图：主图 + 三视图（正面 / 侧面 / 背面）+ 表情图 */
     turn?: string;
     /** 一致性描述：身份 / 外观 / 服装，随任务带出 */
     note: string;

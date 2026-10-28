@@ -11,7 +11,7 @@ import { PUBLIC_SUBJECTS, publicSubjectList, useSubjectStore, type Subject, type
  * 主体库（资产页管理 / 首页选择共用）。
  *
  * 列表对照参考站：顶部「个人添加 / 公共主体」两个 tab，右侧类别筛选与搜索；
- * 卡片是人物图 + 名称 + 星标，公共主体图上左下角叠着三视图（悬停放大）。
+ * 卡片是人物图 + 名称 + 星标，公共主体图上左下角叠着角色设定图（主图 + 三视图 + 表情图，悬停放大）。
  * 点卡片进入详情：左侧大图，右侧类别 / 主体描述 / 三视图 / 「使用主体创作」。
  */
 
@@ -22,9 +22,9 @@ function SubjectCard({ subject, active, onOpen, onStar }: { subject: Subject; ac
     const cover = subject.image;
 
     const turnPopover = subject.turn ? (
-        <div className="w-[520px]">
-            <img src={subject.turn} alt={t("subject.turnAround")} className="w-full rounded-md" />
-            <div className="mt-1.5 text-center text-[11px] text-stone-400">{t("subject.turnAround")}</div>
+        <div className="w-[560px]">
+            <img src={subject.turn} alt={t("subject.charSheet")} className="w-full rounded-md" />
+            <div className="mt-1.5 text-center text-[11px] text-stone-400">{t("subject.charSheetHint")}</div>
         </div>
     ) : null;
 
@@ -45,14 +45,14 @@ function SubjectCard({ subject, active, onOpen, onStar }: { subject: Subject; ac
                         <span className={cn(CARD_ASPECT, "flex w-full items-center justify-center text-2xl text-stone-400")}>{subject.name.slice(0, 1)}</span>
                     )}
 
-                    {/* 三视图：独立叠一层（不烤进卡片图），缩放时始终从超清原图取样，任何 DPR 下都清晰 */}
+                    {/* 角色设定图（主图 + 三视图 + 表情图）：独立叠一层，不烤进卡片图，缩放时始终从超清原图取样 */}
                     {subject.turn ? (
                         <Popover content={turnPopover} placement="right" mouseEnterDelay={0.25} arrow={false}>
                             <span
                                 role="presentation"
-                                className="absolute bottom-[4.5%] left-[4.5%] w-[64%] cursor-zoom-in overflow-hidden rounded-md bg-white/95 p-[2px] shadow-[0_2px_10px_rgba(0,0,0,0.22)] ring-1 ring-black/10 transition hover:ring-2 hover:ring-white"
+                                className="absolute bottom-[4.5%] left-[4.5%] w-[76%] cursor-zoom-in overflow-hidden rounded-md bg-white/95 p-[2px] shadow-[0_2px_10px_rgba(0,0,0,0.22)] ring-1 ring-black/10 transition hover:ring-2 hover:ring-white"
                             >
-                                <img src={subject.turn} alt={t("subject.turnAround")} loading="lazy" className="block w-full rounded-[4px]" />
+                                <img src={subject.turn} alt={t("subject.charSheet")} loading="lazy" className="block w-full rounded-[4px]" />
                             </span>
                         </Popover>
                     ) : null}
@@ -290,10 +290,13 @@ export function SubjectBrowser({ mode, onPicked, keyword = "" }: { mode: "manage
                             </div>
 
                             <div className="mt-4">
-                                <div className="mb-1.5 text-xs font-medium text-stone-700 dark:text-stone-300">{t("subject.turnAround")}</div>
+                                <div className="mb-1.5 flex items-baseline gap-2">
+                                    <span className="text-xs font-medium text-stone-700 dark:text-stone-300">{t("subject.charSheet")}</span>
+                                    <span className="text-[11px] text-stone-400">{t("subject.charSheetHint")}</span>
+                                </div>
                                 {detail.turn ? (
-                                    <Popover content={<img src={detail.turn} alt="" className="w-[720px] rounded-md" />} placement="left" mouseEnterDelay={0.2} arrow={false}>
-                                        <img src={detail.turn} alt={t("subject.turnAround")} className="w-full cursor-zoom-in rounded-lg bg-stone-100 transition hover:opacity-90 dark:bg-stone-900" />
+                                    <Popover content={<img src={detail.turn} alt="" className="w-[760px] rounded-md" />} placement="left" mouseEnterDelay={0.2} arrow={false}>
+                                        <img src={detail.turn} alt={t("subject.charSheet")} className="w-full cursor-zoom-in rounded-lg bg-stone-100 transition hover:opacity-90 dark:bg-stone-900" />
                                     </Popover>
                                 ) : (
                                     <div className="rounded-lg border border-dashed border-stone-200 px-3 py-6 text-center text-[11px] text-stone-400 dark:border-stone-700">{t("subject.noTurnAround")}</div>
