@@ -61,3 +61,82 @@ export function sameMoney(a, b) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
     return Math.abs(x - y) < 0.005;
 }
+
+/* ---------------- API 模式（页内二维码） ---------------- */
+
+/**
+ * 由网关地址推导 API 下单端点。
+ *
+ * 文档：`POST /xpay/epay/mapi.php`（与 submit.php 同参数，但返回 JSON）。
+ * 后台填的网关一般是 submit.php，这里自动换成 mapi.php；已经填了 mapi.php 就原样用。
+ */
+export function apiEndpoint(gateway) {
+    const value = String(gateway || "").trim();
+    if (!value) return "";
+    if (/mapi\.php/i.test(value)) return value;
+    if (/submit\.php/i.test(value)) return value.replace(/submit\.php/i, "mapi.php");
+    return `${value.replace(/\/+$/, "")}/mapi.php`;
+}
+
+/** 同一批参数拼成 form-urlencoded 请求体（值需要编码，与签名时的明文无关）。 */
+function formEncode(params) {
+    return Object.entries(params)
+        .filter(([, value]) => value !== undefined && value !== null && String(value) !== "")
+        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+        .join("&");
+}
+
+/**
+ * API 模式下单：平台返回二维码内容 / 跳转链接 / 小程序 scheme 三者之一，
+ * 前端据此在自己的页面里画二维码，不再跳到支付平台。
+ *
+ * 返回值：{ code, msg, tradeNo, payUrl, qrCode, urlScheme, money }
+ *   code === 1 才算成功；其余情况交给调用方决定是否降级成收银台跳转。
+ */
+export async function createApiOrder(options) {
+    const endpoint = apiEndpoint(options.gateway);
+    if (!endpoint) throw new Error("支付网关地址为空");
+
+    const params = {
+        pid: options.pid,
+        type: options.type,
+        out_trade_no: options.outTradeNo,
+        notify_url: options.notifyUrl,
+        return_url: options.returnUrl,
+        name: options.name,
+        money: options.money,
+        sitename: options.sitename || "",
+        param: options.param || "",
+        clientip: options.clientIp || "",
+        device: options.device || "pc",
+        sign_type: "MD5",
+    };
+    params.sign = epaySign(params, options.key);
+
+    const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: formEncode(params),
+        signal: AbortSignal.timeout(options.timeoutMs || 12000),
+    });
+
+    const text = await response.text();
+    let data = null;
+    try {
+        data = JSON.parse(text);
+    } catch {
+        // 有些网关错误时直接吐 HTML/纯文本，这里截断后抛出，便于后台排查
+        throw new Error(`支付接口返回非 JSON（HTTP ${response.status}）：${text.slice(0, 120)}`);
+    }
+    if (!response.ok) throw new Error(`支付接口 HTTP ${response.status}：${data && (data.msg || data.message) ? data.msg || data.message : "请求失败"}`);
+
+    return {
+        code: Number(data.code),
+        msg: String(data.msg || data.message || ""),
+        tradeNo: String(data.trade_no || ""),
+        payUrl: String(data.payurl || ""),
+        qrCode: String(data.qrcode || ""),
+        urlScheme: String(data.urlscheme || ""),
+        money: String(data.money || ""),
+    };
+}

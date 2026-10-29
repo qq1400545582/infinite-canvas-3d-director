@@ -61,11 +61,25 @@ JS 产物（以前 `web/dist` 里能搜到 `/api/admin/...` 和后台入口链�
 | --- | --- | --- |
 | 概览 | 只读：用户/订单/收入/发信与支付是否就绪 | — |
 | 发信配置 | SMTP 服务器、端口、SSL/STARTTLS、账号、授权码、发件人、邮件自检 | `settings.smtp` |
-| 支付配置 | 易支付网关、pid、密钥、默认支付方式、网站名、客服邮箱 | `settings.epay` |
+| 支付配置 | 易支付网关、pid、密钥、**支付方式多选**（可同时开支付宝/微信/云闪付/QQ 钱包/网银/京东/PayPal，也支持自定义代码）、**支付呈现方式**（页内二维码 / 收银台跳转）、网站名、客服邮箱 | `settings.epay` |
 | 会员权限 | 收费开关、免费试用天数、是否开放注册、是否强制邮箱验证码、站点地址、购买页公告、注册邮箱域名白名单、会员权益清单 | `settings.*` |
 | 会员套餐 | 套餐名称/时长/价格/划线价/角标/说明/排序/上下架/删除 | `plans[]` |
-| 用户管理 | 开通 N 天、精确改到期日、重置试用、启用/禁用、备注 | `users[]` |
+| 用户管理 | **添加用户**（邮箱+密码+直接开通天数，创建后即可登录）、开通 N 天、精确改到期日、重置密码、重置试用、启用/禁用、备注 | `users[]` |
 | 订单 | 按状态筛选、手动标记已支付（线下转账补单） | `orders[]` |
+
+**添加用户与关闭注册配套**：把「开放自助注册」关掉后，注册接口返回 403，但已有账号照常
+登录；新客户由管理员在「用户管理 → 添加用户」里开号，创建成功后会显示一次初始密码
+（带复制按钮），把这串发给客户即可。
+
+**支付方式可以同时开多个**：用户端购买页会出现支付方式选择，用户自己挑。代码由支付平台
+定义，标准码支付为 `alipay` / `wxpay` / `qqpay` / `bank` / `jdpay` / `paypal`；云闪付在部分
+平台写作 `unionpay`、部分归到 `bank`，按平台实际支持的填。平台不认的代码下单会失败并
+降级到收银台，不会让用户卡住。
+
+**页内二维码**（默认）：下单走 `mapi.php`（由网关地址自动推导），平台返回二维码内容后由
+服务端生成 SVG，用户在自己的购买页扫码付款，全程不离开本站。平台偶尔不给二维码（例如
+某些渠道只给跳转链接），这时自动退回收银台，弹窗里给出「前往支付」按钮并显示提示。
+二维码编码器在 `src/qr.js`，零依赖，覆盖版本 1–40 与四档纠错等级（已用 jsQR 逐条解码验证）。
 
 **SMTP 现在由后台管理**：只要在后台保存过一次，`settings.smtp` 就优先于环境变量
 （`GET /api/admin/settings` 的 `mail.source` 会标 `db` / `env` / `none`）。好处是不会
@@ -160,7 +174,14 @@ Nginx 反代要点：
 
 ## 易支付配置
 
-后台「支付设置」填 4 项：网关地址（默认 `https://api-pc.nandiu.com/xpay/epay/submit.php`）、商户 PID、商户密钥、支付方式（`alipay` / `wxpay`）。
+后台「支付配置」填：网关地址（默认 `https://api-pc.nandiu.com/xpay/epay/submit.php`）、商户 PID、商户密钥、支付方式（可多选）、呈现方式（页内二维码 / 收银台跳转）。
+
+两种下单接口（同一个网关目录）：
+
+| 模式 | 端点 | 返回 | 用在哪 |
+| --- | --- | --- | --- |
+| API（页内二维码） | `mapi.php` | JSON：`qrcode` / `payurl` / `urlscheme` 三选一 | 默认。服务端把二维码画成本地 SVG |
+| 页面跳转 | `submit.php` | 收银台页面 | 平台拿不出二维码时的兜底 |
 
 签名实现与官方文档一致（`src/epay.js`）：
 
@@ -181,7 +202,7 @@ Nginx 反代要点：
 | POST | `/api/auth/register` | 注册 `{email,password,code}` |
 | POST | `/api/auth/login` | 登录 `{email,password}` |
 | GET | `/api/auth/me` | 当前账号与授权状态（Bearer） |
-| POST | `/api/pay/create` | 创建订单 `{planId}` → `{payUrl}`（Bearer） |
+| POST | `/api/pay/create` | 创建订单 `{planId, type?}` → `{mode, qrSvg, qrContent, payUrl, notice}`（Bearer） |
 | GET | `/api/pay/order/:outTradeNo` | 查询订单状态（Bearer） |
 | GET/POST | `/api/pay/notify` | 易支付异步通知（验签） |
 | GET | `/api/pay/return` | 支付完成跳回前端购买页 |
@@ -190,7 +211,8 @@ Nginx 反代要点：
 | POST | `/api/admin/test-mail` | 邮件自检 `{to, smtp?}`；`smtp` 传表单当前值可先测后存 |
 | GET/POST/PUT/DELETE | `/api/admin/plans` | 套餐增删改查 |
 | GET | `/api/admin/users` | 用户列表（`?q=` 搜索） |
-| POST | `/api/admin/users/:id/action` | `activate` / `set-expiry` / `reset-trial` / `disable` / `enable` / `note` |
+| POST | `/api/admin/users` | **添加用户** `{email,password,days,trialDays,note}` → 含一次性 `credentials` |
+| POST | `/api/admin/users/:id/action` | `activate` / `set-expiry` / `set-password` / `reset-trial` / `disable` / `enable` / `note` |
 | GET | `/api/admin/orders` | 订单列表（`?status=paid`） |
 | POST | `/api/admin/orders/:outTradeNo/paid` | 手动补单 |
 

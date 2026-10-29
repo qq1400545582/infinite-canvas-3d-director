@@ -559,29 +559,114 @@
     }
 
     /* ---------------- 支付配置 ---------------- */
+    var PAY_TYPE_HINTS = {
+        alipay: "支付宝",
+        wxpay: "微信支付",
+        unionpay: "云闪付",
+        qqpay: "QQ 钱包",
+        bank: "网银支付",
+        jdpay: "京东支付",
+        paypal: "PayPal"
+    };
+
+    function payTypeRow(item) {
+        var code = String(item && item.code || "");
+        return '<tr data-paytype="1">' +
+            '<td style="width:56px"><input type="checkbox" class="pt-enabled" style="width:16px;height:16px"' + (item && item.enabled ? " checked" : "") + "></td>" +
+            '<td><input type="text" class="pt-name" placeholder="' + esc(PAY_TYPE_HINTS[code] || "显示名称") + '" value="' + esc(item && item.name ? item.name : "") + '"></td>' +
+            '<td><input type="text" class="pt-code" placeholder="alipay" value="' + esc(code) + '" style="font-family:var(--mono)"></td>' +
+            '<td style="width:72px;text-align:right"><button class="btn btn-sm btn-ghost" data-remove-paytype>删除</button></td>' +
+            "</tr>";
+    }
+
     function renderPay(host) {
         return api("/api/admin/settings").then(function (conf) {
             var settings = conf.settings || {};
             var epay = settings.epay || {};
+            var payTypes = Array.isArray(epay.payTypes) && epay.payTypes.length ? epay.payTypes : [{ code: "alipay", name: "支付宝", enabled: true }, { code: "wxpay", name: "微信支付", enabled: true }];
             state.cache.settings = settings;
+
+            var defaultType = epay.defaultType || (payTypes.filter(function (item) { return item.enabled; })[0] || payTypes[0] || {}).code || "alipay";
+            var mode = epay.payMode || "native";
+
             host.innerHTML = '<div class="card">' +
                 '<div class="card-head"><div><h3>易支付商户配置</h3><p class="desc">参数来自易支付商户后台。密钥只保存在服务端，页面只显示掩码；异步通知地址为 <span class="mono">/api/pay/notify</span>，需在商户后台确认可访问。</p></div>' +
                 '<span class="tag ' + (epay.hasKey && epay.pid ? "tag-ok" : "tag-danger") + '">' + (epay.hasKey && epay.pid ? "已配置" : "未配置") + "</span></div>" +
-                '<div class="field" style="margin-bottom:14px"><label for="epay-gateway">网关地址</label><input id="epay-gateway" type="text" value="' + esc(epay.gateway || "https://api-pc.nandiu.com/xpay/epay/submit.php") + '"></div>' +
+                '<div class="field" style="margin-bottom:14px"><label for="epay-gateway">网关地址</label><input id="epay-gateway" type="text" value="' + esc(epay.gateway || "https://api-pc.nandiu.com/xpay/epay/submit.php") + '"><span class="hint">填 submit.php 即可，系统会自动使用同目录的 mapi.php 接口（页内二维码）。</span></div>' +
                 '<div class="grid2">' +
                 field("epay-pid", "商户 ID（pid）", '<input id="epay-pid" type="text" placeholder="1000" value="' + esc(epay.pid || "") + '">') +
                 field("epay-key", "商户密钥", '<input id="epay-key" type="password" placeholder="' + (epay.hasKey ? "已保存，留空表示不修改" : "商户后台的密钥") + '" autocomplete="new-password">') +
-                field("epay-type", "默认支付方式", '<select id="epay-type"><option value="alipay"' + (epay.type === "wxpay" ? "" : " selected") + '>支付宝</option><option value="wxpay"' + (epay.type === "wxpay" ? " selected" : "") + '>微信支付</option></select>') +
                 field("epay-sitename", "网站名称", '<input id="epay-sitename" type="text" value="' + esc(epay.sitename || "无限画布") + '">', "显示在收银台") +
                 field("epay-support", "客服邮箱", '<input id="epay-support" type="email" placeholder="选填，显示在购买页" value="' + esc(epay.supportEmail || "") + '">') +
                 "</div>" +
+                '<div class="field" style="margin-bottom:6px"><label for="epay-mode">支付呈现方式</label>' +
+                '<select id="epay-mode">' +
+                '<option value="native"' + (mode === "native" ? " selected" : "") + ">页内二维码（推荐，不跳出本站）</option>" +
+                '<option value="redirect"' + (mode === "redirect" ? " selected" : "") + ">跳转收银台</option>" +
+                "</select>" +
+                '<span class="hint">页内二维码走 API 接口下单：用户在你自己的购买页扫码，页面不跳转。若平台对该笔订单不给二维码，会自动退回跳转支付，不会让用户卡住。</span></div>' +
+                "</div>" +
+
+                '<div class="card"><div class="card-head"><div><h3>支付方式（可多选）</h3>' +
+                '<p class="desc">勾选的会同时出现在用户端购买页，用户自己选。代码由支付平台定义，标准码支付为 <span class="mono">alipay / wxpay / qqpay / bank / jdpay / paypal</span>；云闪付部分平台写作 <span class="mono">unionpay</span>、部分归到 <span class="mono">bank</span>，请按平台实际支持的填写。</p></div></div>' +
+                '<div class="table-wrap"><table id="payTypeTable"><thead><tr><th>启用</th><th>显示名称</th><th>平台代码</th><th></th></tr></thead><tbody>' +
+                payTypes.map(payTypeRow).join("") +
+                "</tbody></table></div>" +
+                '<div class="row" style="margin-top:12px">' +
+                '<button class="btn btn-sm" id="addPayType">+ 新增支付方式</button>' +
+                '<div class="grow"></div>' +
+                '<label for="epay-default" style="font-size:12px;color:var(--muted)">默认选中</label>' +
+                '<select id="epay-default" style="width:160px">' +
+                payTypes.map(function (item) { return '<option value="' + esc(item.code) + '"' + (item.code === defaultType ? " selected" : "") + ">" + esc(item.name || item.code) + "</option>"; }).join("") +
+                "</select></div>" +
+                "</div>" +
+
                 '<div class="actions"><button class="btn btn-primary" id="savePay">保存支付配置</button></div>' +
-                '<p class="desc" style="margin:16px 0 0;font-size:11.5px">未配置 pid / 密钥时，用户点「立即支付」会收到「支付通道尚未配置」。除在线支付外，后台还可在订单列表里手动标记已支付（适用于线下转账）。</p>' +
-                "</div>";
+                '<p class="desc" style="margin:16px 0 0;font-size:11.5px">未配置 pid / 密钥时，用户点「立即支付」会收到「支付通道尚未配置」。除在线支付外，后台还可在订单列表里手动标记已支付（适用于线下转账）。</p>';
+
+            function syncDefaultOptions() {
+                var rows = host.querySelectorAll("[data-paytype]");
+                var select = $("#epay-default");
+                var previous = select.value;
+                var html = "";
+                Array.prototype.forEach.call(rows, function (row) {
+                    var enabled = row.querySelector(".pt-enabled").checked;
+                    var code = row.querySelector(".pt-code").value.trim();
+                    var name = row.querySelector(".pt-name").value.trim() || PAY_TYPE_HINTS[code] || code;
+                    if (!code || !enabled) return;
+                    html += '<option value="' + esc(code) + '">' + esc(name) + "</option>";
+                });
+                select.innerHTML = html || '<option value="">（无可用方式）</option>';
+                if (previous) select.value = previous;
+                if (!select.value && select.options.length) select.selectedIndex = 0;
+            }
+
+            host.querySelector("#payTypeTable").addEventListener("change", function (event) {
+                if (event.target.classList.contains("pt-enabled") || event.target.classList.contains("pt-code")) syncDefaultOptions();
+            });
+            host.querySelector("#payTypeTable").addEventListener("click", function (event) {
+                var btn = event.target.closest("[data-remove-paytype]");
+                if (!btn) return;
+                btn.closest("[data-paytype]").remove();
+                syncDefaultOptions();
+            });
+            $("#addPayType").addEventListener("click", function () {
+                host.querySelector("#payTypeTable tbody").insertAdjacentHTML("beforeend", payTypeRow({ code: "", name: "", enabled: true }));
+                syncDefaultOptions();
+            });
 
             $("#savePay").addEventListener("click", function () {
                 var btn = this;
                 btn.disabled = true;
+                var rows = host.querySelectorAll("[data-paytype]");
+                var payTypesPayload = Array.prototype.map.call(rows, function (row) {
+                    return {
+                        enabled: row.querySelector(".pt-enabled").checked,
+                        name: row.querySelector(".pt-name").value.trim(),
+                        code: row.querySelector(".pt-code").value.trim()
+                    };
+                }).filter(function (item) { return item.code; });
+
                 api("/api/admin/settings", {
                     method: "PUT",
                     body: {
@@ -590,9 +675,11 @@
                                 gateway: $("#epay-gateway").value.trim(),
                                 pid: $("#epay-pid").value.trim(),
                                 key: $("#epay-key").value,
-                                type: $("#epay-type").value,
                                 sitename: $("#epay-sitename").value.trim(),
-                                supportEmail: $("#epay-support").value.trim()
+                                supportEmail: $("#epay-support").value.trim(),
+                                payMode: $("#epay-mode").value,
+                                payTypes: payTypesPayload,
+                                defaultType: $("#epay-default").value
                             }
                         }
                     }
@@ -775,18 +862,59 @@
                     '<td class="nowrap" style="text-align:right">' +
                     '<button class="btn btn-sm" data-act="grant" data-id="' + esc(user.id) + '">开通</button> ' +
                     '<button class="btn btn-sm" data-act="expiry" data-id="' + esc(user.id) + '" data-until="' + esc(until || "") + '">改到期</button> ' +
+                    '<button class="btn btn-sm" data-act="password" data-id="' + esc(user.id) + '">改密码</button> ' +
                     '<button class="btn btn-sm" data-act="' + (user.status === "disabled" ? "enable" : "disable") + '" data-id="' + esc(user.id) + '">' + (user.status === "disabled" ? "启用" : "禁用") + "</button> " +
                     '<button class="btn btn-sm btn-ghost" data-act="note" data-id="' + esc(user.id) + '" data-note="' + esc(user.note || "") + '">备注</button>' +
                     "</td></tr>";
             }).join("");
 
             host.innerHTML = '<div class="card"><div class="card-head"><div><h3>用户（共 ' + esc(data.total) + " 位）</h3>" +
-                '<p class="desc">「开通」按天数顺延；「改到期」可精确指定到期日（客诉补偿用）。</p></div></div>' +
+                '<p class="desc">「开通」按天数顺延；「改到期」可精确指定到期日（客诉补偿用）；「改密码」用于客户忘记密码时重置。</p></div>' +
+                '<button class="btn btn-primary btn-sm" id="addUser">+ 添加用户</button></div>' +
+                (state.cache.created
+                    ? '<div class="banner banner-ok" style="margin-bottom:14px">已创建账号：<span class="mono">' + esc(state.cache.created.email) + "</span> · 初始密码 <span class=\"mono\">" + esc(state.cache.created.password) + '</span>　<button class="btn btn-sm" id="copyCreated" style="margin-left:8px">复制</button><button class="btn btn-sm btn-ghost" id="dismissCreated">知道了</button></div>'
+                    : "") +
                 '<div class="row" style="margin-bottom:14px"><div class="grow"><input id="userQuery" type="text" placeholder="按邮箱搜索" value="' + esc(keyword) + '"></div>' +
                 '<button class="btn" id="userSearch">搜索</button><button class="btn btn-ghost" id="userReset">清空</button></div>' +
                 '<div class="table-wrap"><table><thead><tr><th>邮箱</th><th>状态</th><th>到期</th><th>注册时间</th><th>最近登录</th><th>已付订单</th><th></th></tr></thead><tbody>' +
                 (rows || '<tr><td colspan="7" class="empty">没有匹配的用户</td></tr>') +
                 "</tbody></table></div></div>";
+
+            if (state.cache.created) {
+                $("#copyCreated").addEventListener("click", function () {
+                    var text = state.cache.created.email + " / " + state.cache.created.password;
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(text).then(function () { toast("账号密码已复制", "ok"); }, function () { toast(text, "ok"); });
+                    } else {
+                        toast(text, "ok");
+                    }
+                });
+                $("#dismissCreated").addEventListener("click", function () {
+                    state.cache.created = null;
+                    openView("users");
+                });
+            }
+
+            $("#addUser").addEventListener("click", function () {
+                openModal({
+                    title: "添加用户",
+                    desc: "创建后对方可直接用这个邮箱和密码登录。关闭了自助注册时，就用这里给客户开号。",
+                    fields: [
+                        { key: "email", label: "邮箱（登录账号）", type: "email", placeholder: "user@qq.com" },
+                        { key: "password", label: "初始密码（至少 8 位）", type: "text", placeholder: "至少 8 位，可先填再用「改密码」调整" },
+                        { key: "days", label: "赠送会员天数（0 = 只开账号不给时长）", type: "number", value: 31 },
+                        { key: "note", label: "备注（仅后台可见，可留空）", value: "" }
+                    ],
+                    submitText: "创建账号",
+                    onSubmit: function (values) {
+                        return api("/api/admin/users", { method: "POST", body: values }).then(function (data) {
+                            state.cache.created = data.credentials || { email: values.email, password: values.password };
+                            toast("账号已创建", "ok");
+                            openView("users");
+                        });
+                    }
+                });
+            });
 
             $("#userSearch").addEventListener("click", function () {
                 state.cache.userQuery = $("#userQuery").value.trim();
@@ -824,6 +952,17 @@
                             onSubmit: function (values) {
                                 return api("/api/admin/users/" + encodeURIComponent(id) + "/action", { method: "POST", body: { action: "set-expiry", until: values.until } })
                                     .then(function () { toast("到期时间已更新", "ok"); openView("users"); });
+                            }
+                        });
+                    } else if (act === "password") {
+                        openModal({
+                            title: "重置密码",
+                            desc: "保存后立即生效，请把新密码发给用户。",
+                            fields: [{ key: "password", label: "新密码（至少 8 位）", type: "text", placeholder: "至少 8 位" }],
+                            submitText: "保存",
+                            onSubmit: function (values) {
+                                return api("/api/admin/users/" + encodeURIComponent(id) + "/action", { method: "POST", body: { action: "set-password", password: values.password } })
+                                    .then(function () { toast("密码已重置", "ok"); openView("users"); });
                             }
                         });
                     } else if (act === "note") {

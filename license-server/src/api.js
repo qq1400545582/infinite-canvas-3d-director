@@ -8,8 +8,9 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { epaySign, buildSubmitParams, verifyNotify, sameMoney } from "./epay.js";
+import { epaySign, buildSubmitParams, createApiOrder, verifyNotify, sameMoney } from "./epay.js";
 import { mailerConfigured, normaliseSmtp, sendMail, smtpConfig, smtpSource } from "./mailer.js";
+import { qrDataUrl } from "./qr.js";
 import { hashPassword, newCode, newId, signToken, verifyPassword, verifyToken } from "./security.js";
 import { dbFile, load, save, saveNow } from "./store.js";
 
@@ -192,6 +193,10 @@ function siteUrl(req, settings) {
 /* ---------------- 公开接口 ---------------- */
 
 function settingsView(settings) {
+    const epay = settings.epay || {};
+    const payTypes = (Array.isArray(epay.payTypes) ? epay.payTypes : [])
+        .filter((item) => item && item.enabled && item.code)
+        .map((item) => ({ code: String(item.code), name: String(item.name || item.code) }));
     return {
         paywallEnabled: Boolean(settings.paywallEnabled),
         trialDays: Number(settings.trialDays) || 0,
@@ -201,7 +206,11 @@ function settingsView(settings) {
         entitlements: Array.isArray(settings.entitlements) ? settings.entitlements.filter(Boolean).slice(0, 12) : [],
         notice: settings.notice || "",
         siteUrl: settings.siteUrl || "",
-        supportEmail: (settings.epay && settings.epay.supportEmail) || "",
+        supportEmail: epay.supportEmail || "",
+        /** 用户端可选支付方式（只暴露代码与显示名，不涉及商户凭据）。 */
+        payTypes,
+        defaultPayType: String(epay.defaultType || (payTypes[0] && payTypes[0].code) || ""),
+        payConfigured: Boolean(epay.pid && epay.key),
     };
 }
 
@@ -356,6 +365,14 @@ async function createOrder(req, res) {
         throw new HttpError(503, "epay_not_configured", "支付通道尚未配置商户号，请联系管理员");
     }
 
+    // 支付方式：后台勾选的可选项里挑，用户没指定就用后台默认值
+    const payTypes = (Array.isArray(epay.payTypes) ? epay.payTypes : []).filter((item) => item && item.enabled && item.code);
+    if (!payTypes.length) throw new HttpError(503, "paytype_missing", "后台尚未开启任何支付方式，请联系管理员");
+    const requested = String(body.type || "").trim();
+    const chosen = payTypes.find((item) => item.code === requested)
+        || payTypes.find((item) => item.code === epay.defaultType)
+        || payTypes[0];
+
     const outTradeNo = `IC${Date.now()}${randomBytes(2).toString("hex").toUpperCase()}`;
     const order = {
         id: newId("o"),
@@ -370,18 +387,20 @@ async function createOrder(req, res) {
         createdAt: nowISO(),
         paidAt: null,
         tradeNo: "",
-        payType: epay.type || "alipay",
+        payType: chosen.code,
+        payTypeName: chosen.name || chosen.code,
         source: "epay",
     };
     db.orders.push(order);
     saveNow();
 
     const base = publicBase(req);
-    const { payUrl, params } = buildSubmitParams({
+    const device = /mobile|android|iphone|ipad|micromessenger|alipayclient/i.test(String(req.headers["user-agent"] || "")) ? "mobile" : "pc";
+    const args = {
         gateway: epay.gateway || "https://api-pc.nandiu.com/xpay/epay/submit.php",
         pid: epay.pid,
         key: epay.key,
-        type: epay.type || "alipay",
+        type: chosen.code,
         outTradeNo,
         money: order.money,
         name: plan.name,
@@ -390,9 +409,64 @@ async function createOrder(req, res) {
         sitename: epay.sitename || "无限画布",
         param: user.id,
         clientIp: clientIp(req),
-    });
+        device,
+    };
 
-    ok(res, { outTradeNo, payUrl, params, money: order.money, planName: plan.name });
+    let mode = "redirect";
+    let qrContent = "";
+    let qrSvg = "";
+    let payUrl = "";
+    let urlScheme = "";
+    let notice = "";
+
+    // 默认走 API 模式：平台返回二维码内容，前端在自己的页面里画出来，不外跳
+    if ((epay.payMode || "native") === "native") {
+        try {
+            const result = await createApiOrder(args);
+            if (result.code === 1) {
+                // qrcode 优先；没有 qrcode 时 payurl 同样可以画成二维码（微信/支付宝都能扫）
+                qrContent = result.qrCode || result.payUrl || "";
+                payUrl = result.payUrl || "";
+                urlScheme = result.urlScheme || "";
+                if (qrContent) {
+                    mode = "qr";
+                    qrSvg = qrDataUrl(qrContent, { ecl: "M", margin: 2 });
+                } else if (urlScheme) {
+                    mode = "scheme";
+                    payUrl = urlScheme;
+                }
+                if (result.tradeNo) order.tradeNo = result.tradeNo;
+            } else {
+                notice = result.msg || "支付平台未返回二维码，已切换为收银台跳转";
+                console.warn("[license] mapi 下单失败", { outTradeNo, code: result.code, msg: result.msg });
+            }
+        } catch (error) {
+            notice = "支付平台暂时无法生成二维码，已切换为收银台跳转";
+            console.warn("[license] mapi 请求异常", { outTradeNo, error: error?.message || String(error) });
+        }
+    }
+
+    // 兜底：拿不到二维码就退回页面跳转支付，保证用户不会卡死
+    if (!qrSvg && !urlScheme) {
+        const { payUrl: submitUrl } = buildSubmitParams(args);
+        payUrl = submitUrl;
+        mode = "redirect";
+    }
+
+    saveNow();
+    ok(res, {
+        outTradeNo,
+        mode,
+        qrContent,
+        qrSvg,
+        payUrl,
+        urlScheme,
+        notice,
+        money: order.money,
+        planName: plan.name,
+        payType: chosen.code,
+        payTypeName: chosen.name || chosen.code,
+    });
 }
 
 function orderView(order) {
@@ -627,9 +701,37 @@ async function adminPutSettings(req, res) {
         const epay = target.epay;
         if (s.epay.gateway !== undefined) epay.gateway = String(s.epay.gateway || "").trim();
         if (s.epay.pid !== undefined) epay.pid = String(s.epay.pid || "").trim();
-        if (s.epay.type !== undefined) epay.type = String(s.epay.type || "alipay").trim();
         if (s.epay.sitename !== undefined) epay.sitename = String(s.epay.sitename || "").trim();
         if (s.epay.supportEmail !== undefined) epay.supportEmail = String(s.epay.supportEmail || "").trim();
+        if (s.epay.payMode !== undefined) epay.payMode = s.epay.payMode === "redirect" ? "redirect" : "native";
+
+        // 支付方式列表：允许同时勾选多种，也允许自定义代码（各平台支持的代码不同）
+        if (Array.isArray(s.epay.payTypes)) {
+            const seen = new Set();
+            epay.payTypes = s.epay.payTypes
+                .map((item) => ({
+                    code: String((item && item.code) || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 24),
+                    name: String((item && item.name) || "").trim().slice(0, 24),
+                    enabled: Boolean(item && item.enabled),
+                }))
+                .filter((item) => {
+                    if (!item.code || seen.has(item.code)) return false;
+                    seen.add(item.code);
+                    if (!item.name) item.name = item.code;
+                    return true;
+                })
+                .slice(0, 12);
+        }
+        // 旧版本前端只会传单个 type，当作默认支付方式处理
+        const wantedDefault = s.epay.defaultType !== undefined ? s.epay.defaultType : s.epay.type;
+        if (wantedDefault !== undefined) {
+            epay.defaultType = String(wantedDefault || "").trim();
+            epay.type = epay.defaultType;
+        }
+        const enabled = (epay.payTypes || []).filter((item) => item.enabled);
+        if (!enabled.some((item) => item.code === epay.defaultType)) {
+            epay.defaultType = enabled.length ? enabled[0].code : "alipay";
+        }
         // 密钥只在传入非空且非掩码时覆盖
         if (s.epay.key !== undefined && s.epay.key !== "" && s.epay.key !== "******") epay.key = String(s.epay.key).trim();
     }
@@ -736,6 +838,43 @@ function adminUsers(req, res, url) {
     ok(res, { users: list, total: db.users.length });
 }
 
+async function adminCreateUser(req, res) {
+    requireAdmin(req);
+    const db = load();
+    const body = await readBody(req);
+    const email = normaliseEmail(body.email);
+    if (db.users.some((user) => user.email === email)) throw new HttpError(409, "email_registered", "该邮箱已存在，可直接用现有账号登录或重置密码");
+
+    const password = String(body.password || "");
+    if (password.length < 8) throw new HttpError(400, "weak_password", "密码至少 8 位");
+    if (password.length > 128) throw new HttpError(400, "weak_password", "密码过长");
+
+    // days = 直接开通会员的天数；trialDays = 试用天数（都不填则账号立即可登录但无使用权）
+    const days = Math.max(0, Math.min(3650, Number(body.days) || 0));
+    const trialDays = Math.max(0, Math.min(365, Number(body.trialDays) || 0));
+    const now = Date.now();
+    const user = {
+        id: newId("u"),
+        email,
+        passwordHash: hashPassword(password),
+        status: "normal",
+        createdAt: nowISO(),
+        trialEndsAt: new Date(now + trialDays * 86400000).toISOString(),
+        paidUntil: days > 0 ? new Date(now + days * 86400000).toISOString() : null,
+        lastLoginAt: null,
+        note: String(body.note || "").slice(0, 200),
+        registerIp: "admin",
+        createdBy: "admin",
+    };
+    db.users.push(user);
+    saveNow();
+    ok(res, {
+        user: { ...publicUser(user, db.settings), note: user.note || "", paidOrders: 0 },
+        /** 明文密码只在创建时回一次，方便管理员复制发给用户。 */
+        credentials: { email: user.email, password },
+    });
+}
+
 async function adminUserAction(req, res, id) {
     requireAdmin(req);
     const db = load();
@@ -768,6 +907,12 @@ async function adminUserAction(req, res, id) {
         }
     } else if (action === "note") {
         user.note = String(body.note || "").slice(0, 200);
+    } else if (action === "set-password") {
+        // 后台重置密码：用户端没有「找回密码」流程（要依赖 SMTP），所以由管理员直接改
+        const password = String(body.password || "");
+        if (password.length < 8) throw new HttpError(400, "weak_password", "密码至少 8 位");
+        if (password.length > 128) throw new HttpError(400, "weak_password", "密码过长");
+        user.passwordHash = hashPassword(password);
     } else {
         throw new HttpError(400, "invalid_action", "不支持的操作");
     }
@@ -889,6 +1034,7 @@ export async function handle(req, res) {
     if (planMatch && method === "PUT") return adminSavePlan(req, res, planMatch[1]);
     if (planMatch && method === "DELETE") return adminDeletePlan(req, res, planMatch[1]);
     if (path === "/api/admin/users" && method === "GET") return adminUsers(req, res, url);
+    if (path === "/api/admin/users" && method === "POST") return adminCreateUser(req, res);
     const userMatch = /^\/api\/admin\/users\/([\w-]+)\/action$/.exec(path);
     if (userMatch && method === "POST") return adminUserAction(req, res, userMatch[1]);
     if (path === "/api/admin/orders" && method === "GET") return adminOrders(req, res, url);

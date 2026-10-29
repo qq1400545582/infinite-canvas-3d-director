@@ -20,6 +20,8 @@ export type LicenseUser = {
     license: LicenseState;
 };
 
+export type PayType = { code: string; name: string };
+
 export type PublicSettings = {
     paywallEnabled: boolean;
     trialDays: number;
@@ -30,6 +32,11 @@ export type PublicSettings = {
     notice: string;
     siteUrl: string;
     supportEmail: string;
+    /** 后台勾选开放的支付方式（可能同时有支付宝、微信、云闪付等）。 */
+    payTypes: PayType[];
+    defaultPayType: string;
+    /** 商户号 / 密钥是否已配置；未配置时下单会返回 503。 */
+    payConfigured: boolean;
 };
 
 export type LicensePlan = {
@@ -121,12 +128,32 @@ export function fetchMe(token: string) {
     return request<{ user: LicenseUser; settings: PublicSettings }>("/api/auth/me", { token });
 }
 
-export function createOrder(token: string, planId: string) {
-    return request<{ outTradeNo: string; payUrl: string; money: string; planName: string }>("/api/pay/create", {
+export type PayOrderResult = {
+    outTradeNo: string;
+    /**
+     * qr       = 已在服务端拿到二维码内容，页面内直接展示
+     * scheme   = 只能唤起小程序（打开链接支付）
+     * redirect = 支付平台没给二维码，退回收银台跳转
+     */
+    mode: "qr" | "scheme" | "redirect";
+    qrContent: string;
+    /** 服务端生成的 SVG data URI，可直接塞进 <img src>。 */
+    qrSvg: string;
+    payUrl: string;
+    urlScheme: string;
+    notice: string;
+    money: string;
+    planName: string;
+    payType: string;
+    payTypeName: string;
+};
+
+export function createOrder(token: string, planId: string, type?: string) {
+    return request<PayOrderResult>("/api/pay/create", {
         method: "POST",
-        body: { planId },
+        body: { planId, type },
         token,
-        timeoutMs: 20000,
+        timeoutMs: 30000,
     });
 }
 

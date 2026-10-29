@@ -41,6 +41,16 @@ export const DEFAULT_EMAIL_DOMAINS = [
     "yahoo.com",
 ];
 
+export const DEFAULT_PAY_TYPES = [
+    { code: "alipay", name: "支付宝", enabled: true },
+    { code: "wxpay", name: "微信支付", enabled: true },
+    { code: "unionpay", name: "云闪付", enabled: false },
+    { code: "qqpay", name: "QQ 钱包", enabled: false },
+    { code: "bank", name: "网银支付", enabled: false },
+    { code: "jdpay", name: "京东支付", enabled: false },
+    { code: "paypal", name: "PayPal", enabled: false },
+];
+
 export const DEFAULT_SETTINGS = {
     /** 是否开启付费墙：关闭时全部功能免费，账号只用于识别身份。 */
     paywallEnabled: true,
@@ -62,7 +72,20 @@ export const DEFAULT_SETTINGS = {
         gateway: "https://api-pc.nandiu.com/xpay/epay/submit.php",
         pid: "",
         key: "",
-        type: "alipay",
+        /**
+         * 可同时勾选多种支付方式。code 直接作为易支付的 type 传参；
+         * 各平台支持的代码不完全一样（标准码支付为 alipay/wxpay/qqpay/bank/jdpay/paypal），
+         * 云闪付在部分平台写作 unionpay、在另一些平台归到 bank，后台可自行勾选或新增。
+         */
+        payTypes: DEFAULT_PAY_TYPES,
+        /** 默认选中的支付方式（用户端进入购买页时预选）。 */
+        defaultType: "alipay",
+        /**
+         * 支付呈现方式：
+         *   native   = 走 mapi.php 拿二维码，在平台页面内直接扫码（默认，不外跳）
+         *   redirect = 走 submit.php 跳到平台收银台
+         */
+        payMode: "native",
         sitename: "无限画布",
         supportEmail: "",
     },
@@ -155,9 +178,22 @@ function stamp() {
 
 function hydrate(raw) {
     const parsed = raw;
+    // 迁移前的单支付方式配置：只有 type 没有 defaultType / payTypes
+    const legacyEpay = parsed.settings && parsed.settings.epay;
+    const legacyType = legacyEpay && legacyEpay.type;
+    const hadDefaultType = Boolean(legacyEpay && legacyEpay.defaultType);
+
     mergeDefaults(parsed.settings, DEFAULT_SETTINGS);
     if (!Array.isArray(parsed.plans) || parsed.plans.length === 0) parsed.plans = structuredClone(DEFAULT_PLANS);
     for (const key of ["users", "orders", "codes"]) if (!Array.isArray(parsed[key])) parsed[key] = [];
+
+    // 老库升级：把原来唯一的 type 迁移成「默认支付方式 + 勾选状态」
+    if (!hadDefaultType && legacyType) {
+        const epay = parsed.settings.epay;
+        epay.defaultType = String(legacyType);
+        const hit = (epay.payTypes || []).find((item) => item.code === legacyType);
+        if (hit) hit.enabled = true;
+    }
     return parsed;
 }
 

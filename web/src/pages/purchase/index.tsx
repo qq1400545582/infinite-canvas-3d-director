@@ -1,10 +1,10 @@
-import { ArrowLeft, BadgeCheck, CalendarClock, CircleAlert, ExternalLink, Loader2, LogOut, RefreshCw } from "lucide-react";
+import { ArrowLeft, BadgeCheck, CalendarClock, CircleAlert, Loader2, LogOut, QrCode, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { App } from "antd";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { createOrder, fetchOrder } from "@/features/license/api";
+import { createOrder, fetchOrder, type PayOrderResult } from "@/features/license/api";
 import { licenseEnabled } from "@/features/license/config";
 import { daysLeft, licenseUsable, useLicenseStore } from "@/features/license/use-license-store";
 import { cn } from "@/lib/utils";
@@ -12,8 +12,9 @@ import { cn } from "@/lib/utils";
 /**
  * 套餐购买页 —— 试用到期后唯一可进入的页面。
  *
- * 支付流程：创建订单 → 打开易支付收银台 → 轮询订单状态（服务端以易支付异步通知为准）。
- * 前端不判断“支付成功”，只展示服务端返回的订单状态。
+ * 支付流程：选支付方式 → 创建订单 → 服务端调支付平台 API 拿二维码 →
+ * 直接在页面内展示二维码扫码支付，并轮询订单状态（以服务端异步通知为准）。
+ * 平台实在给不出二维码时才退回收银台跳转，用户不会卡死。
  */
 export default function PurchasePage() {
     const { t } = useTranslation();
@@ -30,11 +31,18 @@ export default function PurchasePage() {
     const [busyPlan, setBusyPlan] = useState("");
     const [pendingOrder, setPendingOrder] = useState(params.get("order") || "");
     const [checking, setChecking] = useState(false);
+    const [payType, setPayType] = useState("");
+    const [payOrder, setPayOrder] = useState<PayOrderResult | null>(null);
+    const [secondsLeft, setSecondsLeft] = useState(0);
 
     const expiredReason = params.get("reason") === "expired";
     const left = daysLeft(user);
     const usable = licenseUsable(user);
     const freeMode = settings ? !settings.paywallEnabled : false;
+
+    const payTypes = useMemo(() => settings?.payTypes ?? [], [settings?.payTypes]);
+    const activePayType = payType || settings?.defaultPayType || payTypes[0]?.code || "";
+    const payTypeName = payTypes.find((item) => item.code === activePayType)?.name || activePayType;
 
     useEffect(() => {
         void loadPublic();
@@ -49,6 +57,7 @@ export default function PurchasePage() {
                 const data = await fetchOrder(token, outTradeNo);
                 if (data.order.status === "paid") {
                     setPendingOrder("");
+                    setPayOrder(null);
                     useLicenseStore.getState().patchUser(data.user);
                     message.success(t("license.purchase.paidSuccess"));
                     return true;
@@ -78,6 +87,15 @@ export default function PurchasePage() {
         return () => clearInterval(timer);
     }, [checkOrder, pendingOrder, token]);
 
+    // 二维码有效期倒计时（15 分钟，与平台订单超时保持一致）
+    useEffect(() => {
+        const key = payOrder?.outTradeNo;
+        if (!key) return;
+        setSecondsLeft(15 * 60);
+        const timer = setInterval(() => setSecondsLeft((value) => (value > 0 ? value - 1 : 0)), 1000);
+        return () => clearInterval(timer);
+    }, [payOrder?.outTradeNo]);
+
     const buy = async (planId: string) => {
         if (!token) {
             navigate("/login");
@@ -85,19 +103,26 @@ export default function PurchasePage() {
         }
         setBusyPlan(planId);
         try {
-            const order = await createOrder(token, planId);
+            const order = await createOrder(token, planId, activePayType || undefined);
             setPendingOrder(order.outTradeNo);
-            const opened = window.open(order.payUrl, "_blank", "noopener,noreferrer");
-            if (!opened) {
-                message.info(t("license.purchase.popupBlocked"));
+            setPayOrder(order);
+            // 支付平台拿不出二维码时才需要跳出页面；这时也给个窗口，避免用户点不动
+            if (order.mode === "redirect" && order.payUrl) {
+                const opened = window.open(order.payUrl, "_blank", "noopener,noreferrer");
+                if (!opened) message.info(t("license.purchase.popupBlocked"));
             }
-            message.success(t("license.purchase.orderCreated", { name: order.planName }));
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("license.purchase.orderFailed"));
         } finally {
             setBusyPlan("");
         }
     };
+
+    const countdownText = useMemo(() => {
+        const minutes = Math.floor(secondsLeft / 60);
+        const seconds = secondsLeft % 60;
+        return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }, [secondsLeft]);
 
     const statusText = useMemo(() => {
         if (!user) return t("license.purchase.notLoggedIn");
@@ -181,7 +206,33 @@ export default function PurchasePage() {
                     ) : plans.length === 0 ? (
                         <div className="mt-5 rounded-xl border border-dashed border-stone-300 px-4 py-6 text-center text-sm text-stone-500 dark:border-stone-700 dark:text-stone-400">{t("license.purchase.noPlans")}</div>
                     ) : (
-                        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <>
+                            {payTypes.length > 0 ? (
+                                <div className="mt-6 flex flex-wrap items-center gap-2">
+                                    <span className="text-xs text-stone-500 dark:text-stone-400">{t("license.purchase.payTypeLabel")}</span>
+                                    {payTypes.map((item) => (
+                                        <button
+                                            key={item.code}
+                                            type="button"
+                                            onClick={() => setPayType(item.code)}
+                                            className={cn(
+                                                "rounded-full border px-3 py-1 text-xs transition",
+                                                item.code === activePayType
+                                                    ? "license-solid border-stone-900 bg-stone-900 text-white dark:border-stone-100 dark:bg-stone-100 dark:text-stone-900"
+                                                    : "border-stone-200 text-stone-600 hover:border-stone-300 hover:text-stone-900 dark:border-stone-700 dark:text-stone-300 dark:hover:border-stone-600",
+                                            )}
+                                        >
+                                            {item.name}
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : null}
+                            {settings && settings.payConfigured === false ? (
+                                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                                    {t("license.purchase.payChannelMissing")}
+                                </div>
+                            ) : null}
+                            <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                             {(() => {
                                 // 主推套餐 = 第一个带角标的（角标文案由后台配置），只高亮一张，避免出现两个黑框
                                 const highlightedId = plans.find((item) => item.badge)?.id;
@@ -218,14 +269,15 @@ export default function PurchasePage() {
                                                     : "border border-stone-300 text-stone-800 hover:bg-stone-50 dark:border-stone-700 dark:text-stone-100 dark:hover:bg-stone-800",
                                             )}
                                         >
-                                            {busyPlan === plan.id ? <Loader2 className="size-4 animate-spin" /> : <ExternalLink className="size-3.5" />}
+                                            {busyPlan === plan.id ? <Loader2 className="size-4 animate-spin" /> : <QrCode className="size-3.5" />}
                                             {t("license.purchase.buy")}
                                         </button>
                                     </div>
                                 );
                                 });
                             })()}
-                        </div>
+                            </div>
+                        </>
                     )}
 
                     {settings?.entitlements?.length ? (
@@ -250,6 +302,89 @@ export default function PurchasePage() {
                     ) : null}
                 </div>
             </div>
+
+            {payOrder ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-stone-950/45 px-4 py-6 backdrop-blur-sm">
+                    <div className="relative w-full max-w-sm rounded-2xl border border-stone-200/80 bg-white p-5 shadow-[0_30px_80px_-40px_rgba(28,25,23,0.7)] dark:border-stone-800 dark:bg-stone-900">
+                        <button
+                            type="button"
+                            onClick={() => setPayOrder(null)}
+                            className="absolute right-3 top-3 rounded-full p-1 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700 dark:hover:bg-stone-800 dark:hover:text-stone-200"
+                            aria-label={t("license.purchase.payDialogClose")}
+                        >
+                            <X className="size-4" />
+                        </button>
+
+                        <div className="text-sm font-medium text-stone-950 dark:text-stone-100">{t("license.purchase.payDialogTitle")}</div>
+                        <div className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+                            {payOrder.planName} · <span className="font-medium text-stone-800 dark:text-stone-200">¥{payOrder.money}</span> · {payOrder.payTypeName}
+                        </div>
+
+                        {payOrder.mode === "qr" && payOrder.qrSvg ? (
+                            <>
+                                <div className="mx-auto mt-4 w-fit rounded-2xl border border-stone-200 bg-white p-2.5 dark:border-stone-700">
+                                    <img src={payOrder.qrSvg} alt="payment qr code" className="size-52" />
+                                </div>
+                                <p className="mt-3 text-center text-xs leading-5 text-stone-600 dark:text-stone-300">
+                                    {t("license.purchase.payDialogScan", { name: payOrder.payTypeName })}
+                                </p>
+                            </>
+                        ) : null}
+
+                        {payOrder.mode === "redirect" ? (
+                            <>
+                                <p className="mt-4 text-xs leading-5 text-stone-600 dark:text-stone-300">{t("license.purchase.payDialogRedirect")}</p>
+                                <a
+                                    href={payOrder.payUrl}
+                                    target="_blank"
+                                    rel="noreferrer noopener"
+                                    className="license-solid mt-3 flex items-center justify-center gap-1.5 rounded-xl bg-stone-900 py-2 text-sm font-medium text-white hover:bg-stone-700 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-white"
+                                >
+                                    {t("license.purchase.payDialogOpen")}
+                                </a>
+                            </>
+                        ) : null}
+
+                        {payOrder.mode === "scheme" ? (
+                            <>
+                                <p className="mt-4 text-xs leading-5 text-stone-600 dark:text-stone-300">{t("license.purchase.payDialogScheme")}</p>
+                                <a
+                                    href={payOrder.payUrl}
+                                    className="license-solid mt-3 flex items-center justify-center gap-1.5 rounded-xl bg-stone-900 py-2 text-sm font-medium text-white hover:bg-stone-700 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-white"
+                                >
+                                    {t("license.purchase.payDialogOpen")}
+                                </a>
+                            </>
+                        ) : null}
+
+                        <div className="mt-3 flex items-center justify-between gap-2 rounded-xl bg-stone-50 px-3 py-2 text-[11px] text-stone-500 dark:bg-stone-800/60 dark:text-stone-400">
+                            <span>{t("license.purchase.payDialogExpire", { time: countdownText })}</span>
+                            <span className="truncate font-mono text-[10px] text-stone-400 dark:text-stone-500">{payOrder.outTradeNo}</span>
+                        </div>
+
+                        <p className="mt-3 text-[11px] leading-5 text-stone-400 dark:text-stone-500">{t("license.purchase.payDialogKeep")}</p>
+
+                        <div className="mt-4 flex gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setPayOrder(null)}
+                                className="flex-1 rounded-xl border border-stone-300 py-2 text-sm text-stone-700 transition hover:bg-stone-50 dark:border-stone-700 dark:text-stone-200 dark:hover:bg-stone-800"
+                            >
+                                {t("license.purchase.payDialogClose")}
+                            </button>
+                            <button
+                                type="button"
+                                disabled={checking}
+                                onClick={() => void checkOrder(payOrder.outTradeNo)}
+                                className="license-solid inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-stone-900 py-2 text-sm font-medium text-white transition hover:bg-stone-700 disabled:opacity-60 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-white"
+                            >
+                                {checking ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                                {t("license.purchase.payDialogPaid")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }
