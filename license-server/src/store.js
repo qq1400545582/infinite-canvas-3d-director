@@ -5,7 +5,7 @@
  * 同时避免 better-sqlite3 在目标机器上编译失败。单实例、千人级用户量完全够用；
  * 需要横向扩容时应换成数据库，替换本模块即可（对外只暴露 get/save）。
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -112,7 +112,8 @@ function emptyDb() {
 
 let db = null;
 let saveTimer = null;
-let saving = Promise.resolve();
+/** 上次读到/写入的 db.json 指纹（mtime+size），用于判断磁盘上的库是否被别人改过。 */
+let fingerprint = "";
 
 function mergeDefaults(target, defaults) {
     for (const [key, value] of Object.entries(defaults)) {
@@ -125,33 +126,82 @@ function mergeDefaults(target, defaults) {
     return target;
 }
 
-export function load() {
-    if (db) return db;
-    mkdirSync(DATA_DIR, { recursive: true });
-    if (existsSync(DB_FILE)) {
-        db = JSON.parse(readFileSync(DB_FILE, "utf8"));
-    } else {
-        db = emptyDb();
+function stamp() {
+    try {
+        const info = statSync(DB_FILE);
+        return `${info.mtimeMs}:${info.size}`;
+    } catch {
+        return "";
     }
-    // 兼容后续新增的配置项：旧库缺字段时补默认值，不覆盖已有值
-    mergeDefaults(db.settings, DEFAULT_SETTINGS);
-    if (!Array.isArray(db.plans) || db.plans.length === 0) db.plans = structuredClone(DEFAULT_PLANS);
-    for (const key of ["users", "orders", "codes"]) if (!Array.isArray(db[key])) db[key] = [];
+}
+
+function hydrate(raw) {
+    const parsed = raw;
+    mergeDefaults(parsed.settings, DEFAULT_SETTINGS);
+    if (!Array.isArray(parsed.plans) || parsed.plans.length === 0) parsed.plans = structuredClone(DEFAULT_PLANS);
+    for (const key of ["users", "orders", "codes"]) if (!Array.isArray(parsed[key])) parsed[key] = [];
+    return parsed;
+}
+
+/**
+ * 读取数据库。
+ *
+ * 关键点：**每次调用都先看磁盘有没有变化**。Wasmer Edge 这类平台会把同一个应用起多份
+ * 实例，每个实例都是独立进程，模块级的 `db` 缓存会让实例之间永久不一致（实测：A 实例写
+ * 完设置，B 实例连着 12 次读到的都是旧值）。所以这里的缓存只做「同一份文件不重复解析」，
+ * 一旦 mtime/size 变了就重新读，保证多实例最终看到同一份数据。
+ */
+export function load() {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const now = stamp();
+    if (db && now && now === fingerprint) return db;
+    if (existsSync(DB_FILE)) {
+        const raw = readFileSync(DB_FILE, "utf8");
+        try {
+            db = hydrate(JSON.parse(raw));
+        } catch (error) {
+            // 写一半断电之类的坏文件：留一份现场，不要让整个服务起不来
+            console.error("[store] db.json 解析失败，已备份为 db.json.broken", error?.message || error);
+            writeFileSync(`${DB_FILE}.broken`, raw, "utf8");
+            db = hydrate(emptyDb());
+        }
+    } else if (!db) {
+        db = hydrate(emptyDb());
+    }
+    fingerprint = now;
     return db;
 }
 
-/** 立即落盘（原子替换，避免写一半断电留下坏文件）。 */
+/**
+ * 立即落盘（原子替换，避免写一半断电留下坏文件）。
+ *
+ * 刻意写成**同步**：Wasmer Edge / 各种 serverless 运行时会在响应返回后立刻把实例
+ * 冻结甚至杀掉，任何基于 setTimeout 的延迟写都不会执行（实测：注册接口返回 200，
+ * 用户却在重启后消失）。这里不追求吞吐，只保证「返回给用户的一定已经写进磁盘」。
+ */
 export function saveNow() {
+    if (!db) return Promise.resolve();
     const data = JSON.stringify(db, null, 2);
-    saving = saving.then(() => {
+    try {
+        mkdirSync(DATA_DIR, { recursive: true });
         const tmp = `${DB_FILE}.tmp`;
         writeFileSync(tmp, data, "utf8");
         renameSync(tmp, DB_FILE);
-    });
-    return saving;
+        // 自己写的结果就是最新状态，同步指纹，避免下一次 load() 白读一遍
+        fingerprint = stamp();
+    } catch (error) {
+        console.error("[store] save failed", error?.message || error);
+    }
+    return Promise.resolve();
 }
 
-/** 合并高频写入（验证码、订单状态），最多 200ms 落一次盘。 */
+/**
+ * 合并高频写入（验证码、订单状态），最多 200ms 落一次盘。
+ *
+ * 只在「同一进程会继续处理更多请求」的长驻部署里划算；serverless 上必须用
+ * saveNow()。当前所有**用户可见的状态变更**都走 saveNow()，这里仅保留给可容忍
+ * 丢失的中间态（验证码、限流计数）。
+ */
 export function save() {
     if (saveTimer) return;
     saveTimer = setTimeout(() => {

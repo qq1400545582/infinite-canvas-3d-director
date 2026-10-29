@@ -2,5 +2,6 @@
 data/
 .env
 .wasmer.env
+app.local.yaml
 node_modules/
 *.log

@@ -1,12 +1,14 @@
 # Wasmer Edge 应用定义（授权服务）
 #
-# 用法（在 license-server 目录内执行）：
-#   wasmer login                                            # 或 WASMER_TOKEN=xxx
-#   wasmer app secret create --from-file=.wasmer.env        # 机密走平台 secret，不入库
-#   wasmer deploy --non-interactive --build-remote --publish-package
+# 部署一律用下面这条（不要直接 `wasmer deploy`，也不要指望 `app secret create`）：
+#   wasmer login                              # 或设置 WASMER_TOKEN
+#   node scripts/wasmer-deploy.mjs            # 读 .wasmer.env，注入机密后 --dir 部署
+#
+# 原因：CLI 7.4.2 的 `app secret create` 对本 app 报 app not found，`--env-file`
+# 又不写运行期 env_vars，而 anybuild 固定读源目录里的这份 app.yaml。详见 README。
 #
 # 注意：本文件会被提交进仓库，所以**只放非机密项**。
-# 口令 / SMTP 密码 / 令牌密钥一律用 `wasmer app secret create` 或 --env-file 注入。
+# 口令 / SMTP 授权码 / 令牌密钥只能写进 .wasmer.env（已 gitignore）。
 
 kind: wasmer.io/App.v0
 name: infinite-canvas-license

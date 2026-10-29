@@ -234,7 +234,7 @@ async function sendCode(req, res) {
     const code = newCode();
     db.codes = db.codes.filter((item) => item.email !== email);
     db.codes.push({ email, code, createdAt: nowISO(), expiresAt: new Date(Date.now() + CODE_TTL_MS).toISOString(), tries: 0 });
-    save();
+    saveNow();
 
     if (!mailerConfigured() && !devEchoCode) {
         throw new HttpError(503, "smtp_not_configured", "服务端尚未配置发信邮箱（SMTP），请联系管理员");
@@ -277,7 +277,7 @@ async function register(req, res) {
         if (record.tries >= 5) throw new HttpError(429, "code_too_many_tries", "验证码错误次数过多，请重新获取");
         if (String(body.code || "").trim() !== record.code) {
             record.tries += 1;
-            save();
+            saveNow();
             throw new HttpError(400, "code_invalid", "验证码不正确");
         }
     }
@@ -297,7 +297,7 @@ async function register(req, res) {
     };
     db.users.push(user);
     db.codes = db.codes.filter((item) => item.email !== email);
-    save();
+    saveNow();
 
     const token = signToken({ uid: user.id, scope: "user" }, USER_TOKEN_TTL);
     ok(res, { token, user: publicUser(user, settings) });
@@ -318,7 +318,7 @@ async function login(req, res) {
     if (user.status === "disabled") throw new HttpError(403, "disabled", "账号已被禁用，请联系管理员");
 
     user.lastLoginAt = nowISO();
-    save();
+    saveNow();
     const token = signToken({ uid: user.id, scope: "user" }, USER_TOKEN_TTL);
     ok(res, { token, user: publicUser(user, settings) });
 }
@@ -362,7 +362,7 @@ async function createOrder(req, res) {
         source: "epay",
     };
     db.orders.push(order);
-    save();
+    saveNow();
 
     const base = publicBase(req);
     const { payUrl, params } = buildSubmitParams({
@@ -721,7 +721,16 @@ export async function handle(req, res) {
         return;
     }
 
-    if (path === "/api/health") return ok(res, { service: "infinite-canvas-license", time: nowISO() });
+    if (path === "/api/health") {
+        // 带一点存储侧信息：多实例部署时靠它判断「这个实例读到的库是不是最新的」
+        const db = load();
+        return ok(res, {
+            service: "infinite-canvas-license",
+            time: nowISO(),
+            store: { users: db.users.length, orders: db.orders.length },
+            mail: { configured: mailerConfigured() },
+        });
+    }
 
     if (path === "/api/settings" && method === "GET") {
         const db = load();
