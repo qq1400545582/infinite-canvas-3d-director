@@ -11,6 +11,9 @@
 import { connect as netConnect } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 
+/** 排障开关：SMTP_DEBUG=1 时把每条命令与回复打到 stderr（远程部署时很有用）。 */
+const debug = process.env.SMTP_DEBUG === "1" ? (...args) => console.error("[smtp]", ...args) : () => {};
+
 function config() {
     const host = (process.env.SMTP_HOST || "").trim();
     if (!host) return null;
@@ -33,18 +36,13 @@ export function mailerConfigured() {
 
 class SmtpSession {
     constructor(socket) {
-        this.socket = socket;
         this.buffer = "";
         this.queue = [];
         this.pending = null;
         this.closed = false;
-        socket.setEncoding("utf8");
-        socket.on("data", (chunk) => {
-            this.buffer += chunk;
-            this.pump();
-        });
-        socket.on("error", (error) => this.fail(error));
-        socket.on("close", () => this.fail(new Error("SMTP 连接已关闭")));
+        // 监听器只在这里挂一次：早先构造里挂过一遍、attach 又挂一遍，
+        // 同一段响应会被追加两次，导致后续命令全部读到错位的回复（QQ 会因此报
+        // "need EHLO and AUTH first"）。
         this.attach(socket);
     }
 
@@ -56,6 +54,7 @@ class SmtpSession {
             this.pump();
         });
         socket.on("error", (error) => this.fail(error));
+        socket.on("close", () => this.fail(new Error("SMTP 连接已关闭")));
     }
 
     pump() {
@@ -102,9 +101,11 @@ class SmtpSession {
     }
 
     async command(line, expect = [2, 3]) {
+        debug(">>>", line.length > 40 ? `${line.slice(0, 10)}…(${line.length})` : line);
         this.socket.write(`${line}\r\n`);
         const reply = await this.read();
         const code = Number.parseInt(reply.slice(0, 3), 10);
+        debug("<<<", reply.replace(/\r?\n/g, " | "));
         if (!expect.includes(Math.floor(code / 100))) {
             throw new Error(`SMTP ${line.split(" ")[0]} 失败：${reply.trim()}`);
         }
@@ -160,14 +161,23 @@ export async function sendMail({ to, subject, text }) {
         }
 
         const supportsPlain = /\bAUTH\b[^\r\n]*\bPLAIN\b/i.test(ehlo);
-        const supportsLogin = /\bAUTH\b[^\r\n]*\bLOGIN\b/i.test(ehlo) || /\bAUTH\b[^\r\n]*\r?\n/i.test(ehlo);
+        const supportsLogin = /\bAUTH\b.*\bLOGIN\b/i.test(ehlo) || /\bAUTH\b/i.test(ehlo);
+        let authError = null;
         if (supportsLogin) {
-            await session.command("AUTH LOGIN", [3]);
-            await session.command(Buffer.from(cfg.user, "utf8").toString("base64"), [3]);
-            await session.command(Buffer.from(cfg.pass, "utf8").toString("base64"), [2]);
-        } else if (supportsPlain) {
+            try {
+                await session.command("AUTH LOGIN", [3]);
+                await session.command(Buffer.from(cfg.user, "utf8").toString("base64"), [3]);
+                await session.command(Buffer.from(cfg.pass, "utf8").toString("base64"), [2]);
+            } catch (error) {
+                // 有的服务端只认 PLAIN；LOGIN 失败后再试一次 PLAIN，两个都失败才报错
+                authError = error;
+            }
+        }
+        if ((authError || !supportsLogin) && supportsPlain) {
             const token = Buffer.from(`\u0000${cfg.user}\u0000${cfg.pass}`, "utf8").toString("base64");
             await session.command(`AUTH PLAIN ${token}`, [2]);
+        } else if (authError) {
+            throw authError;
         }
 
         await session.command(`MAIL FROM:<${cfg.from}>`, [2]);
@@ -175,7 +185,7 @@ export async function sendMail({ to, subject, text }) {
         await session.command("DATA", [3]);
 
         const stamp = new Date().toUTCString();
-        const body = [
+        const message = [
             `From: ${encodeHeader(cfg.fromName)} <${cfg.from}>`,
             `To: <${to}>`,
             `Subject: ${encodeHeader(subject)}`,
@@ -185,10 +195,11 @@ export async function sendMail({ to, subject, text }) {
             "Content-Transfer-Encoding: base64",
             "",
             Buffer.from(text, "utf8").toString("base64").replace(/(.{76})/g, "$1\r\n"),
-            "",
-            ".",
         ].join("\r\n");
-        session.socket.write(`${dotStuff(body)}\r\n`);
+        // dot-stuff 只能作用于正文：消息结束符那行 "." 必须原样发出，
+        // 否则服务端永远等不到 <CRLF>.<CRLF>，连接会一直挂着直到超时。
+        session.socket.write(`${dotStuff(message)}\r\n.\r\n`);
+        debug("<<< (data 已发出)");
         const reply = await session.read();
         if (!/^2\d\d/.test(reply)) throw new Error(`SMTP DATA 被拒绝：${reply.trim()}`);
         await session.command("QUIT", [2]).catch(() => {});
