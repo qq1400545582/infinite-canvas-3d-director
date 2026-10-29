@@ -494,6 +494,22 @@ async function adminLogin(req, res) {
     ok(res, { token: signToken({ scope: "admin" }, ADMIN_TOKEN_TTL), defaultPassword: !process.env.LICENSE_ADMIN_PASSWORD });
 }
 
+/** 邮件自检：远程部署时用来确认 SMTP 出网与凭据是否正确（只有后台能调）。 */
+async function adminTestMail(req, res) {
+    requireAdmin(req);
+    if (!mailerConfigured()) throw new HttpError(400, "smtp_missing", "服务端未配置 SMTP，无法发送");
+    const body = await readBody(req);
+    const to = String(body.to || "").trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) throw new HttpError(400, "bad_email", "请填写正确的收件邮箱");
+    const started = Date.now();
+    await sendMail({
+        to,
+        subject: "无限画布授权服务：邮件自检",
+        text: `这是一封来自授权服务的自检邮件。\n\n收到说明 SMTP 配置正确、出网通畅。\n耗时 ${Date.now() - started} ms（不含网络排队）。`,
+    });
+    ok(res, { sent: true, ms: Date.now() - started });
+}
+
 /** 常量时间比较，避免口令逐字节试探。 */
 function verifyPasswordLike(input, expected) {
     const a = Buffer.from(input, "utf8");
@@ -724,6 +740,7 @@ export async function handle(req, res) {
     if (orderMatch && method === "GET") return getOrder(req, res, orderMatch[1]);
 
     if (path === "/api/admin/login" && method === "POST") return adminLogin(req, res);
+    if (path === "/api/admin/test-mail" && method === "POST") return adminTestMail(req, res);
     if (path === "/api/admin/overview" && method === "GET") return adminOverview(req, res);
     if (path === "/api/admin/settings" && method === "GET") return adminGetSettings(req, res);
     if (path === "/api/admin/settings" && method === "PUT") return adminPutSettings(req, res);

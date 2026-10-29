@@ -1630,6 +1630,14 @@ expertLibrary: {
                 sitename: "Site name",
                 envHint: "SMTP, admin password and similar server-side options live in .env.",
             },
+            testMail: {
+                title: "Mail self-check",
+                hint: "After a remote deploy, use this to confirm outbound SMTP works and the credentials are right.",
+                placeholder: "Recipient email",
+                send: "Send test email",
+                noSmtp: "SMTP is not configured on the server yet.",
+                ok: "Sent in {{ms}} ms - check the inbox or spam folder.",
+            },
             user: {
                 email: "Email",
                 state: "State",

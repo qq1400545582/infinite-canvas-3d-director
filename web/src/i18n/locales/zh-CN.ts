@@ -1630,6 +1630,14 @@ expertLibrary: {
                 sitename: "网站名称",
                 envHint: "SMTP、后台口令等服务端参数需在 .env 中配置。",
             },
+            testMail: {
+                title: "邮件自检",
+                hint: "远程部署后用它确认 SMTP 出网与凭据是否正确，收不到就是服务端发信没配好。",
+                placeholder: "收件邮箱",
+                send: "发送测试邮件",
+                noSmtp: "服务端未配置 SMTP，请先配置后重启服务。",
+                ok: "已发出（耗时 {{ms}} ms），请查收收件箱/垃圾箱。",
+            },
             user: {
                 email: "邮箱",
                 state: "状态",

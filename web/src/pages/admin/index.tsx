@@ -15,6 +15,7 @@ import {
     adminOverview,
     adminPutSettings,
     adminSavePlan,
+    adminTestMail,
     adminUserAction,
     type AdminOrder,
     type AdminPlan,
@@ -405,6 +406,8 @@ function SettingsTab({ token }: { token: string }) {
     const [smtp, setSmtp] = useState(false);
     const [domains, setDomains] = useState("");
     const [saving, setSaving] = useState(false);
+    const [testTo, setTestTo] = useState("");
+    const [testing, setTesting] = useState(false);
 
     useEffect(() => {
         void (async () => {
@@ -418,6 +421,18 @@ function SettingsTab({ token }: { token: string }) {
             }
         })();
     }, [message, t, token]);
+
+    const testMail = async () => {
+        setTesting(true);
+        try {
+            const result = await adminTestMail(token, testTo);
+            message.success(t("license.admin.testMail.ok", { ms: result.ms }));
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("license.admin.loadFailed"));
+        } finally {
+            setTesting(false);
+        }
+    };
 
     const save = async () => {
         if (!settings) return;
@@ -503,6 +518,27 @@ function SettingsTab({ token }: { token: string }) {
                     <Field label={t("license.admin.settings.sitename")}>
                         <Input value={settings.epay.sitename} onChange={(event) => setSettings({ ...settings, epay: { ...settings.epay, sitename: event.target.value } })} />
                     </Field>
+                </div>
+            </Section>
+
+            <Section title={t("license.admin.testMail.title")} hint={t("license.admin.testMail.hint")}>
+                <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                        className="w-64"
+                        value={testTo}
+                        onChange={(event) => setTestTo(event.target.value)}
+                        placeholder={t("license.admin.testMail.placeholder")}
+                    />
+                    <button
+                        type="button"
+                        disabled={testing || !testTo}
+                        onClick={() => void testMail()}
+                        className="shrink-0 whitespace-nowrap rounded-md border border-stone-200 px-3 py-1 text-xs text-stone-700 disabled:opacity-60 dark:border-stone-700 dark:text-stone-200"
+                    >
+                        {testing ? <Loader2 className="mr-1 inline size-3 animate-spin" /> : null}
+                        {t("license.admin.testMail.send")}
+                    </button>
+                    {!smtp ? <span className="text-[11px] text-amber-600 dark:text-amber-400">{t("license.admin.testMail.noSmtp")}</span> : null}
                 </div>
             </Section>
 

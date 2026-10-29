@@ -189,6 +189,10 @@ export function adminPutSettings(token: string, settings: Partial<AdminSettings>
     return request<{ settings: AdminSettings }>("/api/admin/settings", { method: "PUT", body: { settings }, token });
 }
 
+export function adminTestMail(token: string, to: string) {
+    return request<{ sent: boolean; ms: number }>("/api/admin/test-mail", { method: "POST", body: { to }, token });
+}
+
 export function adminListPlans(token: string) {
     return request<{ plans: AdminPlan[] }>("/api/admin/plans", { token });
 }
