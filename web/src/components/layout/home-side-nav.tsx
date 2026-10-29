@@ -7,6 +7,7 @@ import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 import { GitHubLink } from "@/components/layout/github-link";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { navigationTools, type NavigationToolSlug } from "@/constant/navigation-tools";
+import { AccountButton } from "@/features/license/account-button";
 import { changeAppLocale, type AppLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { useAgentStore } from "@/stores/use-agent-store";
@@ -94,6 +95,8 @@ export function HomeSideNav() {
                 <Tooltip title={t("version.viewUpdates")} placement="right" mouseEnterDelay={0.2}>
                     <VersionReleaseModal className={cn(ICON_BTN, "text-[10px] font-medium tracking-tight")} />
                 </Tooltip>
+
+                <AccountButton tone="dark" className={ICON_BTN} />
 
                 <GitHubLink className={cn(ICON_BTN, "bg-transparent text-base hover:bg-white/[0.14]")} />
             </div>

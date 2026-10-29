@@ -1,0 +1,15 @@
+{
+    "name": "infinite-canvas-license-server",
+    "version": "1.0.0",
+    "private": true,
+    "description": "无限画布账号与授权服务：邮箱注册登录、免费试用、易支付下单与异步通知、运营后台 API。零运行时依赖。",
+    "type": "module",
+    "main": "src/index.js",
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "start": "node src/index.js",
+        "dev": "node --watch src/index.js"
+    }
+}

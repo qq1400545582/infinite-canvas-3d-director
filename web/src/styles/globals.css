@@ -644,3 +644,22 @@ body {
         padding-top: env(safe-area-inset-top);
     }
 }
+
+/*
+ * 实心按钮的文本色兜底。
+ *
+ * antd 的 reset.css 里有一条未分层（unlayered）的 `button { color: inherit }`，
+ * 而 Tailwind v4 把 `text-*` 工具类放进 @layer utilities —— 未分层规则在层叠里
+ * 优先于所有分层规则，且层级优先于选择器特异性，所以 `<button class="bg-stone-900
+ * text-white">` 的文字会变回继承色，出现「深色按钮 + 深色文字」看不见的问题。
+ * 背景色不受影响（那条 reset 只设了 color），所以只有文字会消失。
+ *
+ * 这里用同等未分层的规则把颜色钉死，避免逐处改成内联样式。
+ */
+.license-solid {
+    color: #fff;
+}
+
+.dark .license-solid {
+    color: var(--color-stone-900);
+}

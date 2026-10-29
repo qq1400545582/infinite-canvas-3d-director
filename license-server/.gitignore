@@ -1,0 +1,5 @@
+# 运行数据（用户、订单、密钥）绝不入库
+data/
+.env
+node_modules/
+*.log

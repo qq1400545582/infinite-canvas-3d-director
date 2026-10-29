@@ -4,6 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { navigationTools, type NavigationToolSlug } from "@/constant/navigation-tools";
+import { AccountButton } from "@/features/license/account-button";
 import { AppConfigModal } from "@/components/layout/app-config-modal";
 import { DesktopDownloadButton } from "@/components/layout/desktop-download-button";
 import { MobileNavDrawer } from "@/components/layout/mobile-nav-drawer";
@@ -97,6 +98,7 @@ export function AppTopNav() {
                                 <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" icon={<Bot className="size-4" />} onClick={togglePanel} aria-label={t(panelOpen ? "topNav.closeAgent" : "topNav.openAgent")} />
                             </Tooltip>
                             <DesktopDownloadButton />
+                            <AccountButton />
                             <UserStatusActions />
                         </div>
                     </div>
