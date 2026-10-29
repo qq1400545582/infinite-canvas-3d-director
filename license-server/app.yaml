@@ -1,0 +1,38 @@
+# Wasmer Edge 应用定义（授权服务）
+#
+# 用法（在 license-server 目录内执行）：
+#   wasmer login                                            # 或 WASMER_TOKEN=xxx
+#   wasmer app secret create --from-file=.wasmer.env        # 机密走平台 secret，不入库
+#   wasmer deploy --non-interactive --build-remote --publish-package
+#
+# 注意：本文件会被提交进仓库，所以**只放非机密项**。
+# 口令 / SMTP 密码 / 令牌密钥一律用 `wasmer app secret create` 或 --env-file 注入。
+
+kind: wasmer.io/App.v0
+name: infinite-canvas-license
+owner: "1400545582" # 纯数字 owner 必须加引号，否则 YAML 解析成整数会报 "No owner specified"
+package: .
+
+# 非机密配置；机密项不要写在这里（写了就会随仓库泄露）
+env:
+  # 对外地址：拼易支付 notify_url 用；换成自定义域名后要同步改这里再 redeploy
+  LICENSE_PUBLIC_URL: "https://infinite-canvas-license.wasmer.app"
+  # 挂载的持久化卷路径，见下方 volumes
+  LICENSE_DATA_DIR: "/data"
+  LICENSE_ALLOWED_ORIGINS: "*"
+  LICENSE_LOG: "0"
+
+# 用户、订单、套餐都在这个卷里；改名或删除这一节会**立刻清空数据**
+volumes:
+  - name: license-data
+    mount: /data
+
+# 平台自带发信（sendmail）默认关闭：它要求付费套餐，且发件域名是 wasmer 分配的，
+# 进 QQ/163 收件箱的概率不如自己的邮箱。要用就把下面的 false 改成 true 并 redeploy。
+enable_email: false
+
+# 以后加自定义域名：先在 DNS 指 CNAME 到 <app>.wasmer.app，再在下面登记
+# domains:
+#   - license.example.com
+
+debug: false

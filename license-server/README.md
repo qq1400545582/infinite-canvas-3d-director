@@ -57,6 +57,45 @@ docker run -d --name license \
   infinite-canvas-license
 ```
 
+### Wasmer Edge（`*.wasmer.app`）
+
+仓库里已带 `app.yaml`（owner `1400545582`，卷挂 `/data`）。机密走平台 secret，不进仓库：
+
+```bash
+cd license-server
+cat > .wasmer.env <<'EOF'      # 这个文件已在 .gitignore，别提交
+LICENSE_ADMIN_PASSWORD=换成强口令
+LICENSE_SECRET=随机长字符串
+SMTP_HOST=smtp.qq.com
+SMTP_PORT=465
+SMTP_SECURE=1
+SMTP_USER=your@qq.com
+SMTP_PASS=授权码
+SMTP_FROM=your@qq.com
+SMTP_FROM_NAME=无限画布
+EOF
+
+wasmer login                                     # 或 WASMER_TOKEN=xxx
+wasmer app secret create --from-file=.wasmer.env  # 写进平台，之后可在控制台改
+wasmer deploy --non-interactive --build-remote --publish-package
+```
+
+部署完拿到 `https://infinite-canvas-license.wasmer.app`，用 `GET /api/health` 自检。
+换自定义域名：DNS 加 CNAME → 取消 `app.yaml` 里 `domains:` 的注释 → 同步改 `LICENSE_PUBLIC_URL` → redeploy。
+
+**上 Wasmer 前必须知道的四条**
+
+1. **出站 SMTP 需要实测**：本服务用原始 TCP 连 `smtp.qq.com:465`。Wasmer 是否放行 465/587 出站
+   我还没在本机验过（需要 token 才能起实例）。若不通，三条退路：① `enable_email: true` 用平台 sendmail
+   （要付费套餐，发件域名由 wasmer 分配，进收件箱率不如自己的邮箱）；② 换 HTTP 邮件 API
+   （阿里云邮件推送 / Resend 等，需要在 `mailer.js` 加一个传输分支）；③ 部署到自己的 VPS。
+2. **卷是区域性的**，且官方写明"不适合强一致的数据库"。本服务是 JSON 全量落盘，
+   若平台起了多个实例，并发写会互相覆盖（丢注册/丢订单）。部署后先看控制台实例数，多实例就要
+   换 Postgres（`capabilities.database`）或迁到单实例 VPS。
+3. **卷改名/删除 = 数据立刻清空**，`app.yaml` 里 `license-data` 这个名字别动。
+4. **`notify_url` 必须公网可达**：先用浏览器或 curl 打一次
+   `https://<域名>/api/pay/notify` 确认码支付服务器能访问（不要求返回 success，能连上就行）。
+
 ### 宝塔 / 裸机
 
 ```bash
