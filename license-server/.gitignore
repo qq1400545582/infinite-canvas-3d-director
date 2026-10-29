@@ -5,3 +5,6 @@ data/
 app.local.yaml
 node_modules/
 *.log
+
+# 前端产物：部署时由 scripts/wasmer-deploy.mjs 拷进临时目录的 public/，仓库里不放构建结果
+public/

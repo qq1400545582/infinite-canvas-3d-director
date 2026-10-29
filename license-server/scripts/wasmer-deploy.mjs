@@ -12,7 +12,7 @@
  * 用法：
  *   node scripts/wasmer-deploy.mjs [--env-file .wasmer.env] [--dry-run]
  */
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,6 +65,38 @@ function copyTree(from, to) {
 }
 copyTree(join(root, "src"), join(dir, "src"));
 writeFileSync(join(dir, "package.json"), readFileSync(join(root, "package.json")));
+
+/* ---------------- 前端产物（让域名根路径就是主应用首页） ---------------- */
+// 不放进仓库（web/dist 是构建产物），只在部署时拷进临时目录的 public/。
+// 用 --no-web 可以只更新后台接口（部署体积小、速度快）；--web <dir> 指定别的构建目录。
+const noWeb = argv.includes("--no-web");
+const webDir = resolve(root, argOf("--web", "../web/dist"));
+let webStat = null;
+if (!noWeb) {
+    if (!existsSync(join(webDir, "index.html"))) {
+        console.warn(`⚠ 没找到前端产物 ${join(webDir, "index.html")}，本次只部署接口与后台；`);
+        console.warn("  域名根路径会显示落地页（或跳转到后台配的「站点地址」）。");
+    } else {
+        const target = join(dir, "public");
+        copyTree(webDir, target);
+        let files = 0;
+        let bytes = 0;
+        (function walk(p) {
+            for (const entry of readdirSync(p, { withFileTypes: true })) {
+                const full = join(p, entry.name);
+                if (entry.isDirectory()) walk(full);
+                else {
+                    files += 1;
+                    bytes += statSync(full).size;
+                }
+            }
+        })(target);
+        webStat = { files, bytes };
+        console.log(`前端产物: ${webDir} → public/（${files} 个文件，${(bytes / 1048576).toFixed(1)} MB）`);
+        const entry = /assets\/index-[A-Za-z0-9_-]+\.js/.exec(readFileSync(join(webDir, "index.html"), "utf8"));
+        if (entry) console.log("入口:", entry[0]);
+    }
+}
 
 const template = readFileSync(join(root, "app.yaml"), "utf8");
 const quote = (v) => `"${String(v).replace(/"/g, '\\"')}"`;

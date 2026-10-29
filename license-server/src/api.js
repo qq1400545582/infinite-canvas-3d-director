@@ -12,6 +12,7 @@ import { epaySign, buildSubmitParams, createApiOrder, verifyNotify, sameMoney } 
 import { mailerConfigured, normaliseSmtp, sendMail, smtpConfig, smtpSource } from "./mailer.js";
 import { qrDataUrl } from "./qr.js";
 import { hashPassword, newCode, newId, signToken, verifyPassword, verifyToken } from "./security.js";
+import { serveWeb, webReady, webRoot } from "./static.js";
 import { dbFile, load, save, saveNow } from "./store.js";
 
 const USER_TOKEN_TTL = 60 * 60 * 24 * 7; // 7 天免登录
@@ -952,9 +953,8 @@ async function adminMarkPaid(req, res, outTradeNo) {
 /* ---------------- 独立管理后台页面 ---------------- */
 
 /**
- * 后台是**本服务自带的一页静态 HTML**，与主应用（web 前端）完全解耦：
- * 前端只保留用户登录/购买，任何后台入口、后台代码都不再打进 web 产物。
- * 部署上就是「同一个域名的 /admin」，想彻底分离时给它单独绑域名即可。
+ * 后台是**本服务自带的一页静态 HTML**，与主应用（web 前端）完全解耦。
+ * 域名同一台服务上：`/admin` = 后台，`/` 及前端路由 = 主应用（见 ./static.js）。
  */
 const ADMIN_HTML_FILE = join(dirname(fileURLToPath(import.meta.url)), "admin.html");
 let adminHtml = null;
@@ -967,6 +967,36 @@ function serveAdminPage(res) {
         "x-robots-tag": "noindex, nofollow",
     });
     res.end(adminHtml);
+}
+
+/**
+ * 部署包里没带前端产物时的兜底：
+ * - 后台配了「站点地址」→ 302 过去（前端在别的域名）；
+ * - 否则给一页说明，绝不把根路径又导回 /admin（那正是用户抱怨「删掉 /admin 还是后台」的原因）。
+ */
+function serveLanding(req, res) {
+    const site = String(load()?.settings?.siteUrl || "").trim().replace(/\/+$/, "");
+    if (site) {
+        res.writeHead(302, { location: `${site}/`, "cache-control": "no-store" });
+        res.end();
+        return;
+    }
+    const missing = join(webRoot(), "index.html");
+    const html = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>无限画布授权服务</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0c0a09;color:#e7e5e4;font:15px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:560px;padding:40px 28px}code{background:#1c1917;padding:2px 6px;border-radius:6px;font-size:13px}
+a{display:inline-block;margin-top:22px;padding:10px 18px;border-radius:10px;background:#e7e5e4;color:#0c0a09;text-decoration:none;font-weight:600}
+p{color:#a8a29e}</style></head>
+<body><main><h1 style="font-size:20px;margin:0 0 12px">授权服务运行中</h1>
+<p>本次部署只包含账号 / 支付 / 后台接口，没有随包上传前端产物。</p>
+<p>要让这个域名直接打开主应用，请用 <code>node scripts/wasmer-deploy.mjs</code>（会带上 web/dist），
+或在后台「会员权限 → 站点地址」里填上前端域名，根路径会自动跳过去。</p>
+<p style="font-size:13px;opacity:.7">未找到：<code>${missing.replace(/[<&>]/g, "")}</code></p>
+<a href="/admin">进入运营后台</a></main></body></html>`;
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    res.end(html);
 }
 
 /* ---------------- 路由分发 ---------------- */
@@ -982,13 +1012,11 @@ export async function handle(req, res) {
         return;
     }
 
-    // 域名根路径直接进后台：这是一台「授权服务」，对外开放的页面只有 /admin
+    // /admin 固定是运营后台；先于静态资源判断，免得被前端 SPA 回退吃掉
     if (path === "/admin") return serveAdminPage(res);
-    if (path === "/") {
-        res.writeHead(302, { location: "/admin", "cache-control": "no-store" });
-        res.end();
-        return;
-    }
+
+    // 其余非接口路径都归前端主应用：部署包里带了 public/ 就直接托管静态产物
+    if (!path.startsWith("/api/") && serveWeb(req, res, path)) return;
 
     if (path === "/favicon.ico") {
         res.writeHead(204);
@@ -1040,6 +1068,16 @@ export async function handle(req, res) {
     if (path === "/api/admin/orders" && method === "GET") return adminOrders(req, res, url);
     const markMatch = /^\/api\/admin\/orders\/([\w-]+)\/paid$/.exec(path);
     if (markMatch && method === "POST") return adminMarkPaid(req, res, markMatch[1]);
+
+    // 走到这里说明不是接口：导航请求交给「首页 / 落地页」，其他资源老实回 404 文本，
+    // 免得缺图、缺 chunk 时返回一坨 HTML 反而更难排查。
+    if (!path.startsWith("/api/")) {
+        const wantsHtml = (req.headers.accept || "").includes("text/html");
+        if (wantsHtml && (method === "GET" || method === "HEAD")) return serveLanding(req, res);
+        res.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+        res.end("Not Found");
+        return;
+    }
 
     throw new HttpError(404, "not_found", "接口不存在");
 }

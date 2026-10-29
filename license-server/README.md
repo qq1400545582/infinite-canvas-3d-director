@@ -42,14 +42,29 @@ node src/index.js         # 零依赖，Node >= 20
 
 - 服务地址 `http://127.0.0.1:8787`
 - 健康检查 `GET /api/health`
-- **运营后台 `http://127.0.0.1:8787/admin`**（口令即 `LICENSE_ADMIN_PASSWORD`）。根路径 `/` 会 302 到 `/admin`
+- **运营后台 `http://127.0.0.1:8787/admin`**（口令即 `LICENSE_ADMIN_PASSWORD`）
+- 根路径 `/` 是**主应用首页**：部署目录里有 `public/` 时直接托管前端产物，没有时给落地页
+  （或跳转到后台配的「站点地址」），**不会再把根路径导回后台**。本地想让 `/` 也是主应用：
+  `LICENSE_WEB_DIR=../web/dist node src/index.js`
+
+## 同一域名下的两个入口
+
+| 路径 | 内容 |
+| --- | --- |
+| `/`、`/login`、`/purchase`、其他前端路由 | 主应用（`web/dist`，SPA 回退到 `index.html`） |
+| `/admin` | 运营后台（`src/admin.html`，单页，零依赖） |
+| `/api/*` | JSON 接口（账号、授权、支付、后台） |
+
+部署脚本会把 `web/dist` 一起拷进部署目录的 `public/`（`--no-web` 可以只更新后台接口，
+部署体积从 76 MB 降到几百 KB）。静态资源里 `/assets/*` 带 hash，按
+`max-age=31536000, immutable` 长缓存；`index.html`、`config.js`、插件清单走 `no-cache` + ETag。
 
 ## 前后端分离：后台不再在主应用里
 
 | 角色 | 部署位置 | 内容 |
 | --- | --- | --- |
-| 用户端 | 静态站 / 桌面壳（`web/dist`） | 只有登录、注册、购买、以及画布本身；**不再包含任何后台页面或后台请求** |
-| 运营后台 | 本服务自带（`<授权服务域名>/admin`） | 单文件 HTML，零依赖，随 `src/` 一起部署 |
+| 用户端 | 同一域名的 `/`（也可用静态站 / 桌面壳） | 只有登录、注册、购买、以及画布本身；**不再包含任何后台页面或后台请求** |
+| 运营后台 | 同一域名的 `/admin` | 单文件 HTML，零依赖，随 `src/` 一起部署 |
 
 这样做的原因：后台改一次配置不必重新构建整个前端；后台代码不会被打进公开的
 JS 产物（以前 `web/dist` 里能搜到 `/api/admin/...` 和后台入口链接）；想进一步隔离
@@ -137,9 +152,18 @@ node scripts/wasmer-deploy.mjs                   # 见下方说明，别直接�
 3. anybuild 固定读**源目录**里的 `app.yaml`，`--path app.local.yaml` 会被忽略
    （日志里那句 `Using original app.yaml found in source directory`）。
 
-所以 `scripts/wasmer-deploy.mjs` 做的事是：把 `src/` + `package.json` + 注入过机密的
-`app.yaml` 拷到系统临时目录，再 `wasmer deploy --dir <临时目录>`。仓库里的 `app.yaml`
+所以 `scripts/wasmer-deploy.mjs` 做的事是：把 `src/` + `package.json` + `../web/dist`（→ `public/`）
++ 注入过机密的 `app.yaml` 拷到系统临时目录，再 `wasmer deploy --dir <临时目录>`。仓库里的 `app.yaml`
 永远是干净模板，机密只存在于 `.wasmer.env` 和平台侧的版本配置里。
+
+前端产物是构建出来的，不进仓库，所以每次部署前请先构建：
+
+```bash
+cd ../web && VITE_LICENSE_API=https://<授权服务域名> VITE_LICENSE_REQUIRED=1 npx vite build
+cd ../license-server && node scripts/wasmer-deploy.mjs            # 带前端（76 MB，慢）
+node scripts/wasmer-deploy.mjs --no-web                            # 只更后台/接口（几百 KB，快）
+node scripts/wasmer-deploy.mjs --web D:/other/dist                 # 指定别的产物目录
+```
 
 部署完的验收顺序：`GET /api/health` → 后台登录 → 运营设置里点「邮件自检」→ 用真邮箱注册一次。
 
@@ -195,6 +219,7 @@ Nginx 反代要点：
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| GET | `/` `/*` | 主应用（`public/` 静态产物，SPA 回退；无产物时跳「站点地址」或给落地页） |
 | GET | `/admin` | 运营后台（服务端自带单页，无构建步骤） |
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/settings` | 公开配置（白名单域名、试用天数、是否开放注册、会员权益、在用套餐） |
