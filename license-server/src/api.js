@@ -5,8 +5,11 @@
  * 支付异步通知例外——易支付要求返回纯文本 success，否则会持续重推。
  */
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { epaySign, buildSubmitParams, verifyNotify, sameMoney } from "./epay.js";
-import { mailerConfigured, sendMail } from "./mailer.js";
+import { mailerConfigured, normaliseSmtp, sendMail, smtpConfig, smtpSource } from "./mailer.js";
 import { hashPassword, newCode, newId, signToken, verifyPassword, verifyToken } from "./security.js";
 import { dbFile, load, save, saveNow } from "./store.js";
 
@@ -194,6 +197,8 @@ function settingsView(settings) {
         trialDays: Number(settings.trialDays) || 0,
         emailDomains: settings.emailDomains || [],
         requireEmailCode: codeRequired(settings),
+        registerEnabled: settings.registerEnabled !== false,
+        entitlements: Array.isArray(settings.entitlements) ? settings.entitlements.filter(Boolean).slice(0, 12) : [],
         notice: settings.notice || "",
         siteUrl: settings.siteUrl || "",
         supportEmail: (settings.epay && settings.epay.supportEmail) || "",
@@ -221,6 +226,7 @@ async function sendCode(req, res) {
     const body = await readBody(req);
     const db = load();
     const settings = db.settings;
+    if (settings.registerEnabled === false) throw new HttpError(403, "register_closed", "暂未开放注册，请联系管理员开通账号");
     const email = normaliseEmail(body.email);
     assertDomainAllowed(email, settings);
 
@@ -242,11 +248,16 @@ async function sendCode(req, res) {
 
     if (mailerConfigured()) {
         const minutes = Math.round(CODE_TTL_MS / 60000);
-        await sendMail({
-            to: email,
-            subject: "【无限画布】注册验证码",
-            text: `你的注册验证码是 ${code}，${minutes} 分钟内有效。\n\n如果不是你本人操作，请忽略本邮件。`,
-        });
+        try {
+            await sendMail({
+                to: email,
+                subject: "【无限画布】注册验证码",
+                text: `你的注册验证码是 ${code}，${minutes} 分钟内有效。\n\n如果不是你本人操作，请忽略本邮件。`,
+            });
+        } catch (error) {
+            console.error("[license] 验证码邮件发送失败", error?.message || error);
+            throw new HttpError(502, "mail_failed", `验证码邮件发送失败：${error?.message || error}。请联系管理员检查发信配置`);
+        }
     }
     if (devEchoCode) console.log(`[license] dev code for ${email}: ${code}`);
 
@@ -259,6 +270,7 @@ async function register(req, res) {
     const body = await readBody(req);
     const db = load();
     const settings = db.settings;
+    if (settings.registerEnabled === false) throw new HttpError(403, "register_closed", "暂未开放注册，请联系管理员开通账号");
     const email = normaliseEmail(body.email);
     assertDomainAllowed(email, settings);
 
@@ -494,20 +506,40 @@ async function adminLogin(req, res) {
     ok(res, { token: signToken({ scope: "admin" }, ADMIN_TOKEN_TTL), defaultPassword: !process.env.LICENSE_ADMIN_PASSWORD });
 }
 
-/** 邮件自检：远程部署时用来确认 SMTP 出网与凭据是否正确（只有后台能调）。 */
+/**
+ * 邮件自检：远程部署时用来确认 SMTP 出网与凭据是否正确（只有后台能调）。
+ *
+ * 支持传 `smtp` 覆盖当前配置——后台可以先「测试」再「保存」，避免存坏了配置
+ * 导致验证码发不出去（此时只能去服务端改文件才能救回来）。
+ */
 async function adminTestMail(req, res) {
     requireAdmin(req);
-    if (!mailerConfigured()) throw new HttpError(400, "smtp_missing", "服务端未配置 SMTP，无法发送");
     const body = await readBody(req);
     const to = String(body.to || "").trim();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) throw new HttpError(400, "bad_email", "请填写正确的收件邮箱");
+
+    const current = smtpConfig() || {};
+    let cfg = smtpConfig();
+    if (body.smtp && typeof body.smtp === "object") {
+        // 掩码/空口令表示「沿用已保存的口令」，避免测试前必须重填授权码
+        const merged = { ...current, ...body.smtp };
+        if (!body.smtp.pass || body.smtp.pass === "******") merged.pass = current.pass || "";
+        cfg = normaliseSmtp(merged);
+    }
+    if (!mailerConfigured(cfg)) throw new HttpError(400, "smtp_missing", "尚未配置发信邮箱（SMTP），请先填写并保存");
+
     const started = Date.now();
-    await sendMail({
-        to,
-        subject: "无限画布授权服务：邮件自检",
-        text: `这是一封来自授权服务的自检邮件。\n\n收到说明 SMTP 配置正确、出网通畅。\n耗时 ${Date.now() - started} ms（不含网络排队）。`,
-    });
-    ok(res, { sent: true, ms: Date.now() - started });
+    try {
+        await sendMail({
+            to,
+            subject: "无限画布授权服务：邮件自检",
+            text: `这是一封来自授权服务的自检邮件。\n\n收到说明 SMTP 配置正确、出网通畅。\n耗时 ${Date.now() - started} ms（不含网络排队）。`,
+            smtp: cfg,
+        });
+    } catch (error) {
+        throw new HttpError(502, "smtp_failed", `发信失败：${error?.message || error}`);
+    }
+    ok(res, { sent: true, ms: Date.now() - started, host: cfg.host, port: cfg.port });
 }
 
 /** 常量时间比较，避免口令逐字节试探。 */
@@ -544,14 +576,27 @@ function adminOverview(req, res) {
 function adminGetSettings(req, res) {
     requireAdmin(req);
     const db = load();
-    const epay = db.settings.epay || {};
+    const settings = db.settings;
+    const epay = settings.epay || {};
+    const smtp = settings.smtp || {};
+    const active = smtpConfig() || {};
     ok(res, {
         settings: {
-            ...db.settings,
-            // 密钥不回传给前端，只回“是否已配置”
+            ...settings,
+            // 密钥/授权码不回传给前端，只回「是否已配置」
             epay: { ...epay, key: epay.key ? "******" : "", hasKey: Boolean(epay.key) },
+            // hasPass 看的是**生效值**：还没在后台存过口令时，环境变量里那份也算已配置
+            smtp: { ...smtp, pass: smtp.pass ? "******" : "", hasPass: Boolean(smtp.pass || active.pass) },
         },
-        smtpConfigured: mailerConfigured(),
+        mail: {
+            configured: mailerConfigured(),
+            source: smtpSource(),
+            host: active.host || "",
+            port: active.port || 0,
+            secure: Boolean(active.secure),
+            user: active.user || "",
+            from: active.from || "",
+        },
         devEchoCode,
         dbFile,
     });
@@ -567,8 +612,12 @@ async function adminPutSettings(req, res) {
     if (s.paywallEnabled !== undefined) target.paywallEnabled = Boolean(s.paywallEnabled);
     if (s.trialDays !== undefined) target.trialDays = Math.max(0, Math.min(365, Number(s.trialDays) || 0));
     if (s.requireEmailCode !== undefined) target.requireEmailCode = Boolean(s.requireEmailCode);
+    if (s.registerEnabled !== undefined) target.registerEnabled = Boolean(s.registerEnabled);
     if (s.siteUrl !== undefined) target.siteUrl = String(s.siteUrl || "").trim().replace(/\/+$/, "");
     if (s.notice !== undefined) target.notice = String(s.notice || "");
+    if (Array.isArray(s.entitlements)) {
+        target.entitlements = s.entitlements.map((item) => String(item || "").trim().slice(0, 80)).filter(Boolean).slice(0, 12);
+    }
     if (Array.isArray(s.emailDomains)) {
         target.emailDomains = s.emailDomains
             .map((item) => String(item).trim().toLowerCase().replace(/^@/, ""))
@@ -580,11 +629,46 @@ async function adminPutSettings(req, res) {
         if (s.epay.pid !== undefined) epay.pid = String(s.epay.pid || "").trim();
         if (s.epay.type !== undefined) epay.type = String(s.epay.type || "alipay").trim();
         if (s.epay.sitename !== undefined) epay.sitename = String(s.epay.sitename || "").trim();
+        if (s.epay.supportEmail !== undefined) epay.supportEmail = String(s.epay.supportEmail || "").trim();
         // 密钥只在传入非空且非掩码时覆盖
         if (s.epay.key !== undefined && s.epay.key !== "" && s.epay.key !== "******") epay.key = String(s.epay.key).trim();
     }
+    if (s.smtp && typeof s.smtp === "object") {
+        // 允许直接填 host 并在后台改授权码，不必再动环境变量 / 重新部署
+        const smtp = target.smtp;
+        if (s.smtp.host !== undefined) smtp.host = String(s.smtp.host || "").trim();
+        if (s.smtp.port !== undefined) smtp.port = Math.max(1, Math.min(65535, Number(s.smtp.port) || 465));
+        if (s.smtp.secure !== undefined) smtp.secure = Boolean(s.smtp.secure);
+        if (s.smtp.user !== undefined) smtp.user = String(s.smtp.user || "").trim();
+        if (s.smtp.from !== undefined) smtp.from = String(s.smtp.from || "").trim();
+        if (s.smtp.fromName !== undefined) smtp.fromName = String(s.smtp.fromName || "").trim() || "无限画布";
+        if (s.smtp.pass !== undefined && s.smtp.pass !== "" && s.smtp.pass !== "******") smtp.pass = String(s.smtp.pass).trim();
+        if (!smtp.pass) {
+            // 口令留空且库里还没有：把环境变量里那份接过来。
+            // 否则「从环境变量切到后台管理」时只保存了其它字段，反而把发信搞坏（口令变空）。
+            const envPass = (process.env.SMTP_PASS || "").trim();
+            if (envPass) smtp.pass = envPass;
+        }
+    }
     saveNow();
-    ok(res, { settings: { ...target, epay: { ...target.epay, key: target.epay.key ? "******" : "", hasKey: Boolean(target.epay.key) } } });
+
+    const active = smtpConfig() || {};
+    ok(res, {
+        settings: {
+            ...target,
+            epay: { ...target.epay, key: target.epay.key ? "******" : "", hasKey: Boolean(target.epay.key) },
+            smtp: { ...target.smtp, pass: target.smtp.pass ? "******" : "", hasPass: Boolean(target.smtp.pass || active.pass) },
+        },
+        mail: {
+            configured: mailerConfigured(),
+            source: smtpSource(),
+            host: active.host || "",
+            port: active.port || 0,
+            secure: Boolean(active.secure),
+            user: active.user || "",
+            from: active.from || "",
+        },
+    });
 }
 
 function adminPlans(req, res) {
@@ -672,6 +756,18 @@ async function adminUserAction(req, res, id) {
     } else if (action === "reset-trial") {
         user.trialEndsAt = new Date(Date.now() + Math.max(0, Number(body.days ?? db.settings.trialDays) || 0) * 86400000).toISOString();
         user.paidUntil = null;
+    } else if (action === "set-expiry") {
+        // 精确改到期时间（含清空）：按天加容易多给/少给，遇到客诉直接用日期改
+        const raw = String(body.until || "").trim();
+        if (!raw) {
+            user.paidUntil = null;
+        } else {
+            const ts = new Date(raw).getTime();
+            if (!Number.isFinite(ts)) throw new HttpError(400, "bad_date", "到期日期格式不正确");
+            user.paidUntil = new Date(ts).toISOString();
+        }
+    } else if (action === "note") {
+        user.note = String(body.note || "").slice(0, 200);
     } else {
         throw new HttpError(400, "invalid_action", "不支持的操作");
     }
@@ -708,6 +804,26 @@ async function adminMarkPaid(req, res, outTradeNo) {
     ok(res, { order });
 }
 
+/* ---------------- 独立管理后台页面 ---------------- */
+
+/**
+ * 后台是**本服务自带的一页静态 HTML**，与主应用（web 前端）完全解耦：
+ * 前端只保留用户登录/购买，任何后台入口、后台代码都不再打进 web 产物。
+ * 部署上就是「同一个域名的 /admin」，想彻底分离时给它单独绑域名即可。
+ */
+const ADMIN_HTML_FILE = join(dirname(fileURLToPath(import.meta.url)), "admin.html");
+let adminHtml = null;
+
+function serveAdminPage(res) {
+    if (!adminHtml) adminHtml = readFileSync(ADMIN_HTML_FILE, "utf8");
+    res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-cache",
+        "x-robots-tag": "noindex, nofollow",
+    });
+    res.end(adminHtml);
+}
+
 /* ---------------- 路由分发 ---------------- */
 
 export async function handle(req, res) {
@@ -716,6 +832,20 @@ export async function handle(req, res) {
     const method = (req.method || "GET").toUpperCase();
 
     if (method === "OPTIONS") {
+        res.writeHead(204);
+        res.end();
+        return;
+    }
+
+    // 域名根路径直接进后台：这是一台「授权服务」，对外开放的页面只有 /admin
+    if (path === "/admin") return serveAdminPage(res);
+    if (path === "/") {
+        res.writeHead(302, { location: "/admin", "cache-control": "no-store" });
+        res.end();
+        return;
+    }
+
+    if (path === "/favicon.ico") {
         res.writeHead(204);
         res.end();
         return;

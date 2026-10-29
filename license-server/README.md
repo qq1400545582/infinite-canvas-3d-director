@@ -42,7 +42,36 @@ node src/index.js         # 零依赖，Node >= 20
 
 - 服务地址 `http://127.0.0.1:8787`
 - 健康检查 `GET /api/health`
-- 后台页面在**主应用**里：`http://127.0.0.1:3000/admin`（口令即 `LICENSE_ADMIN_PASSWORD`）
+- **运营后台 `http://127.0.0.1:8787/admin`**（口令即 `LICENSE_ADMIN_PASSWORD`）。根路径 `/` 会 302 到 `/admin`
+
+## 前后端分离：后台不再在主应用里
+
+| 角色 | 部署位置 | 内容 |
+| --- | --- | --- |
+| 用户端 | 静态站 / 桌面壳（`web/dist`） | 只有登录、注册、购买、以及画布本身；**不再包含任何后台页面或后台请求** |
+| 运营后台 | 本服务自带（`<授权服务域名>/admin`） | 单文件 HTML，零依赖，随 `src/` 一起部署 |
+
+这样做的原因：后台改一次配置不必重新构建整个前端；后台代码不会被打进公开的
+JS 产物（以前 `web/dist` 里能搜到 `/api/admin/...` 和后台入口链接）；想进一步隔离
+就给后台单独绑一个域名（Nginx 反代到同一服务，只放行 `/admin` 与 `/api/admin/*`）。
+
+后台页面（`src/admin.html`）的七个页签与对应能力：
+
+| 页签 | 能改什么 | 落库位置 |
+| --- | --- | --- |
+| 概览 | 只读：用户/订单/收入/发信与支付是否就绪 | — |
+| 发信配置 | SMTP 服务器、端口、SSL/STARTTLS、账号、授权码、发件人、邮件自检 | `settings.smtp` |
+| 支付配置 | 易支付网关、pid、密钥、默认支付方式、网站名、客服邮箱 | `settings.epay` |
+| 会员权限 | 收费开关、免费试用天数、是否开放注册、是否强制邮箱验证码、站点地址、购买页公告、注册邮箱域名白名单、会员权益清单 | `settings.*` |
+| 会员套餐 | 套餐名称/时长/价格/划线价/角标/说明/排序/上下架/删除 | `plans[]` |
+| 用户管理 | 开通 N 天、精确改到期日、重置试用、启用/禁用、备注 | `users[]` |
+| 订单 | 按状态筛选、手动标记已支付（线下转账补单） | `orders[]` |
+
+**SMTP 现在由后台管理**：只要在后台保存过一次，`settings.smtp` 就优先于环境变量
+（`GET /api/admin/settings` 的 `mail.source` 会标 `db` / `env` / `none`）。好处是不会
+因为改个授权码就要重新部署；回退办法是把「发信服务器」清空并保存，就会重新读环境变量。
+「邮件自检」支持**先试发、后保存**——用表单当前值发一封，收到再点保存，避免把配置存坏
+之后验证码彻底发不出去（那种情况只能去服务器上改文件）。
 
 ## 部署
 
@@ -145,8 +174,9 @@ Nginx 反代要点：
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| GET | `/admin` | 运营后台（服务端自带单页，无构建步骤） |
 | GET | `/api/health` | 健康检查 |
-| GET | `/api/settings` | 公开配置（白名单域名、试用天数、在用套餐） |
+| GET | `/api/settings` | 公开配置（白名单域名、试用天数、是否开放注册、会员权益、在用套餐） |
 | POST | `/api/auth/send-code` | 发送注册验证码 `{email}` |
 | POST | `/api/auth/register` | 注册 `{email,password,code}` |
 | POST | `/api/auth/login` | 登录 `{email,password}` |
@@ -156,10 +186,11 @@ Nginx 反代要点：
 | GET/POST | `/api/pay/notify` | 易支付异步通知（验签） |
 | GET | `/api/pay/return` | 支付完成跳回前端购买页 |
 | POST | `/api/admin/login` | 后台口令登录 |
-| GET/PUT | `/api/admin/settings` | 读/写运营设置 |
+| GET/PUT | `/api/admin/settings` | 读/写运营设置（含 `smtp`、`epay`、会员权限） |
+| POST | `/api/admin/test-mail` | 邮件自检 `{to, smtp?}`；`smtp` 传表单当前值可先测后存 |
 | GET/POST/PUT/DELETE | `/api/admin/plans` | 套餐增删改查 |
 | GET | `/api/admin/users` | 用户列表（`?q=` 搜索） |
-| POST | `/api/admin/users/:id/action` | `activate` / `disable` / `enable` / `reset-trial` |
+| POST | `/api/admin/users/:id/action` | `activate` / `set-expiry` / `reset-trial` / `disable` / `enable` / `note` |
 | GET | `/api/admin/orders` | 订单列表（`?status=paid`） |
 | POST | `/api/admin/orders/:outTradeNo/paid` | 手动补单 |
 
@@ -178,5 +209,5 @@ Nginx 反代要点：
 | 变量 | 说明 |
 | --- | --- |
 | `LICENSE_PUBLIC_URL` | 对外地址，拼 `notify_url` 用，部署到域名后必填 |
-| `LICENSE_ADMIN_PASSWORD` | 后台口令，不填默认 `admin123` |
-| `SMTP_*` | 发信用，QQ 邮箱填授权码；未配置时验证码注册不可用（可用 `LICENSE_DEV_ECHO_CODE=1` 本地调试） |
+| `LICENSE_ADMIN_PASSWORD` | 后台口令，不填默认 `admin123`（启动日志会告警，后台首页也会标红） |
+| `SMTP_*` | 发信参数**初始值**；后台「发信配置」保存一次后就以数据库为准（可不再改环境变量） |

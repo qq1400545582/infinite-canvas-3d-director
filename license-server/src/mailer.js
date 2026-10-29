@@ -10,27 +10,67 @@
  */
 import { connect as netConnect } from "node:net";
 import { connect as tlsConnect } from "node:tls";
+import { load } from "./store.js";
 
 /** 排障开关：SMTP_DEBUG=1 时把每条命令与回复打到 stderr（远程部署时很有用）。 */
 const debug = process.env.SMTP_DEBUG === "1" ? (...args) => console.error("[smtp]", ...args) : () => {};
 
-function config() {
-    const host = (process.env.SMTP_HOST || "").trim();
+/** 统一成内部结构：缺 host 直接视为未配置。 */
+export function normaliseSmtp(raw) {
+    const host = String(raw?.host || "").trim();
     if (!host) return null;
-    const port = Number.parseInt(process.env.SMTP_PORT || "", 10) || (process.env.SMTP_SECURE === "0" ? 587 : 465);
+    const secureHint = raw.secure;
+    const port = Number.parseInt(raw.port, 10) || (secureHint === false ? 587 : 465);
+    const secure = secureHint === undefined || secureHint === null ? port === 465 : Boolean(secureHint);
+    const user = String(raw.user || "").trim();
+    const from = String(raw.from || "").trim() || user;
     return {
         host,
         port,
-        secure: process.env.SMTP_SECURE ? process.env.SMTP_SECURE !== "0" : port === 465,
-        user: (process.env.SMTP_USER || "").trim(),
-        pass: process.env.SMTP_PASS || "",
-        from: (process.env.SMTP_FROM || process.env.SMTP_USER || "").trim(),
-        fromName: (process.env.SMTP_FROM_NAME || "无限画布").trim(),
+        secure,
+        user,
+        pass: String(raw.pass || ""),
+        from,
+        fromName: String(raw.fromName || "无限画布").trim(),
     };
 }
 
-export function mailerConfigured() {
-    const cfg = config();
+/** 环境变量回退（老部署 / 未在后台填过发信配置时使用）。 */
+function envConfig() {
+    const host = (process.env.SMTP_HOST || "").trim();
+    if (!host) return null;
+    return normaliseSmtp({
+        host,
+        port: process.env.SMTP_PORT,
+        secure: process.env.SMTP_SECURE === undefined ? undefined : process.env.SMTP_SECURE !== "0",
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+        from: process.env.SMTP_FROM,
+        fromName: process.env.SMTP_FROM_NAME,
+    });
+}
+
+/** 存储里的配置优先：后台改完即时生效，不用 redeploy。 */
+function storedConfig() {
+    try {
+        return normaliseSmtp(load()?.settings?.smtp);
+    } catch {
+        return null;
+    }
+}
+
+/** 当前生效的发信配置（可能为 null）。 */
+export function smtpConfig() {
+    return storedConfig() || envConfig();
+}
+
+/** 配置来源，后台用来提示「这条是从环境变量读的，改了会覆盖」。 */
+export function smtpSource() {
+    if (storedConfig()) return "db";
+    return envConfig() ? "env" : "none";
+}
+
+export function mailerConfigured(cfg = smtpConfig()) {
     return Boolean(cfg && cfg.user && cfg.pass && cfg.from);
 }
 
@@ -132,10 +172,12 @@ async function upgradeToTls(socket, host) {
 
 /**
  * 发送纯文本邮件。失败抛异常，由调用方决定是否降级。
+ *
+ * `smtp` 可选：传了就用这份配置试发（后台"先测再存"），不传则用当前生效配置。
  */
-export async function sendMail({ to, subject, text }) {
-    const cfg = config();
-    if (!mailerConfigured()) throw new Error("SMTP 未配置");
+export async function sendMail({ to, subject, text, smtp }) {
+    const cfg = smtp ? normaliseSmtp(smtp) : smtpConfig();
+    if (!mailerConfigured(cfg)) throw new Error("SMTP 未配置");
 
     const socket = cfg.secure
         ? tlsConnect({ host: cfg.host, port: cfg.port, servername: cfg.host })

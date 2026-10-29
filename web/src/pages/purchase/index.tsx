@@ -2,7 +2,7 @@ import { ArrowLeft, BadgeCheck, CalendarClock, CircleAlert, ExternalLink, Loader
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { App } from "antd";
 import { useTranslation } from "react-i18next";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { createOrder, fetchOrder } from "@/features/license/api";
 import { licenseEnabled } from "@/features/license/config";
@@ -228,18 +228,26 @@ export default function PurchasePage() {
                         </div>
                     )}
 
+                    {settings?.entitlements?.length ? (
+                        <div className="mt-6 rounded-2xl border border-stone-200/80 bg-stone-50/60 px-4 py-3.5 dark:border-stone-800 dark:bg-stone-800/40">
+                            <div className="text-xs font-medium text-stone-700 dark:text-stone-200">{t("license.purchase.entitlementsTitle")}</div>
+                            <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                                {settings.entitlements.map((item) => (
+                                    <li key={item} className="flex items-start gap-1.5 text-[11.5px] leading-5 text-stone-500 dark:text-stone-400">
+                                        <BadgeCheck className="mt-0.5 size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                                        {item}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    ) : null}
+
                     <p className="mt-5 text-[11px] leading-5 text-stone-400 dark:text-stone-500">{t("license.purchase.payNote")}</p>
                     {settings?.supportEmail ? (
                         <p className="mt-1 text-[11px] text-stone-400 dark:text-stone-500">
                             {t("license.purchase.support", { email: settings.supportEmail })}
                         </p>
                     ) : null}
-                </div>
-
-                <div className="mt-4 text-center text-[11px] text-stone-400">
-                    <Link to="/admin" className="hover:underline">
-                        {t("license.admin.entry")}
-                    </Link>
                 </div>
             </div>
         </div>

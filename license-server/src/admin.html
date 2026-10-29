@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>无限画布 · 运营后台</title>
+<style>
+    :root {
+        --bg: #f5f5f4;
+        --panel: #ffffff;
+        --panel-soft: #fafaf9;
+        --border: #e7e5e4;
+        --border-strong: #d6d3d1;
+        --text: #1c1917;
+        --muted: #78716c;
+        --faint: #a8a29e;
+        --accent: #1c1917;
+        --accent-text: #ffffff;
+        --ok: #047857;
+        --ok-soft: #ecfdf5;
+        --warn: #b45309;
+        --warn-soft: #fffbeb;
+        --danger: #b91c1c;
+        --danger-soft: #fef2f2;
+        --info: #0369a1;
+        --info-soft: #f0f9ff;
+        --radius: 14px;
+        --shadow: 0 18px 45px -34px rgba(28, 25, 23, 0.55);
+    }
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --bg: #17171a;
+            --panel: #1f1f23;
+            --panel-soft: #232326;
+            --border: #303035;
+            --border-strong: #3f3f46;
+            --text: #f4f4f5;
+            --muted: #a1a1aa;
+            --faint: #71717a;
+            --accent: #f4f4f5;
+            --accent-text: #18181b;
+            --ok: #34d399;
+            --ok-soft: rgba(16, 185, 129, 0.12);
+            --warn: #fbbf24;
+            --warn-soft: rgba(245, 158, 11, 0.12);
+            --danger: #f87171;
+            --danger-soft: rgba(239, 68, 68, 0.12);
+            --info: #7dd3fc;
+            --info-soft: rgba(56, 189, 248, 0.12);
+            --shadow: 0 18px 45px -34px rgba(0, 0, 0, 0.8);
+        }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        -webkit-font-smoothing: antialiased;
+    }
+    .hidden { display: none !important; }
+    a { color: inherit; }
+    button, input, select, textarea { font: inherit; color: inherit; }
+
+    /* ---------- 登录 ---------- */
+    .login {
+        min-height: 100dvh; display: grid; place-items: center; padding: 24px;
+    }
+    .login-card {
+        width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--border);
+        border-radius: 20px; padding: 30px 28px; box-shadow: var(--shadow);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -0.01em; }
+    .brand-mark {
+        width: 30px; height: 30px; border-radius: 9px; background: var(--accent); color: var(--accent-text);
+        display: grid; place-items: center; font-size: 13px; font-weight: 700;
+    }
+    .login-card h1 { font-size: 19px; margin: 20px 0 4px; letter-spacing: -0.01em; }
+    .login-card p { margin: 0 0 20px; color: var(--muted); font-size: 12.5px; }
+
+    /* ---------- 通用控件 ---------- */
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field > label { font-size: 12px; color: var(--muted); font-weight: 500; }
+    .field .hint { font-size: 11px; color: var(--faint); line-height: 1.5; }
+    input[type="text"], input[type="password"], input[type="number"], input[type="email"], input[type="url"], input[type="date"], select, textarea {
+        width: 100%; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--border-strong);
+        background: var(--panel); outline: none; transition: border-color .15s, box-shadow .15s;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--muted); box-shadow: 0 0 0 3px rgba(120, 113, 108, 0.12); }
+    textarea { resize: vertical; min-height: 92px; line-height: 1.7; }
+    .btn {
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        padding: 9px 16px; border-radius: 10px; border: 1px solid var(--border-strong);
+        background: var(--panel); cursor: pointer; font-weight: 500; transition: background .15s, opacity .15s, border-color .15s;
+        white-space: nowrap;
+    }
+    .btn:hover { background: var(--panel-soft); }
+    .btn:disabled { opacity: .55; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+    .btn-primary:hover { opacity: .88; background: var(--accent); }
+    .btn-sm { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
+    .btn-ghost { border-color: transparent; background: transparent; color: var(--muted); }
+    .btn-ghost:hover { background: var(--panel-soft); color: var(--text); }
+    .btn-danger { color: var(--danger); border-color: var(--border-strong); }
+    .btn-danger:hover { background: var(--danger-soft); }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .grow { flex: 1 1 160px; }
+
+    /* ---------- 布局 ---------- */
+    .shell { min-height: 100dvh; display: grid; grid-template-columns: 216px minmax(0, 1fr); }
+    .side {
+        border-right: 1px solid var(--border); background: var(--panel); padding: 18px 12px;
+        display: flex; flex-direction: column; gap: 4px; position: sticky; top: 0; height: 100dvh;
+    }
+    .side .brand { padding: 6px 8px 18px; }
+    .nav-item {
+        display: flex; align-items: center; gap: 9px; padding: 9px 11px; border-radius: 10px;
+        color: var(--muted); cursor: pointer; border: none; background: transparent; text-align: left; width: 100%;
+        transition: background .15s, color .15s;
+    }
+    .nav-item:hover { background: var(--panel-soft); color: var(--text); }
+    .nav-item.active { background: var(--panel-soft); color: var(--text); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border); }
+    .nav-item .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+    .nav-item.active .dot { background: var(--accent); }
+    .side-foot { margin-top: auto; padding: 10px 8px 0; border-top: 1px solid var(--border); font-size: 11px; color: var(--faint); }
+
+    .main { min-width: 0; display: flex; flex-direction: column; }
+    .topbar {
+        display: flex; align-items: center; justify-content: space-between; gap: 12px;
+        padding: 16px 26px; border-bottom: 1px solid var(--border); background: var(--panel);
+        position: sticky; top: 0; z-index: 5;
+    }
+    .topbar h2 { margin: 0; font-size: 16px; letter-spacing: -0.01em; }
+    .topbar .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .content { padding: 22px 26px 60px; max-width: 1080px; width: 100%; }
+
+    .card {
+        background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 20px; box-shadow: var(--shadow); margin-bottom: 16px;
+    }
+    .card h3 { margin: 0 0 4px; font-size: 14.5px; letter-spacing: -0.01em; }
+    .card .desc { margin: 0 0 16px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+    .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+    .card-head h3 { margin-bottom: 2px; }
+    .grid2 { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+
+    .stats { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); }
+    .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+    .stat .k { font-size: 11.5px; color: var(--muted); }
+    .stat .v { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; margin-top: 4px; }
+    .stat .v small { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 3px; }
+
+    .tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }
+    .tag-ok { background: var(--ok-soft); color: var(--ok); }
+    .tag-warn { background: var(--warn-soft); color: var(--warn); }
+    .tag-danger { background: var(--danger-soft); color: var(--danger); }
+    .tag-info { background: var(--info-soft); color: var(--info); }
+    .tag-mute { background: var(--panel-soft); color: var(--muted); box-shadow: inset 0 0 0 1px var(--border); }
+
+    .banner { display: flex; gap: 9px; align-items: flex-start; padding: 11px 13px; border-radius: 10px; font-size: 12.5px; line-height: 1.6; margin-bottom: 14px; }
+    .banner-warn { background: var(--warn-soft); color: var(--warn); }
+    .banner-info { background: var(--info-soft); color: var(--info); }
+    .banner-ok { background: var(--ok-soft); color: var(--ok); }
+    .banner-danger { background: var(--danger-soft); color: var(--danger); }
+
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    th, td { text-align: left; padding: 10px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+    th { color: var(--muted); font-weight: 500; font-size: 11.5px; white-space: nowrap; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: var(--panel-soft); }
+    .table-wrap { overflow-x: auto; margin: 0 -4px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+    .muted { color: var(--muted); }
+    .nowrap { white-space: nowrap; }
+    .empty { padding: 34px; text-align: center; color: var(--muted); font-size: 12.5px; }
+
+    /* ---------- 弹窗 ---------- */
+    .mask {
+        position: fixed; inset: 0; background: rgba(23, 23, 23, 0.42); backdrop-filter: blur(2px);
+        display: grid; place-items: center; padding: 20px; z-index: 50;
+    }
+    .modal {
+        width: 100%; max-width: 460px; background: var(--panel); border-radius: 16px;
+        border: 1px solid var(--border); box-shadow: 0 30px 80px -40px rgba(0, 0, 0, .6);
+        padding: 22px; max-height: 86dvh; overflow: auto;
+    }
+    .modal h3 { margin: 0 0 16px; font-size: 15px; }
+    .modal .fields { display: flex; flex-direction: column; gap: 13px; }
+    .modal-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+    /* ---------- Toast ---------- */
+    #toasts { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+    .toast {
+        background: var(--panel); border: 1px solid var(--border-strong); border-radius: 999px;
+        padding: 8px 16px; font-size: 12.5px; box-shadow: var(--shadow); animation: pop .18s ease-out;
+    }
+    .toast.ok { color: var(--ok); }
+    .toast.err { color: var(--danger); }
+    @keyframes pop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+    @media (max-width: 860px) {
+        .shell { grid-template-columns: 1fr; }
+        .side { position: static; height: auto; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); align-items: center; }
+        .side .brand { padding: 0 8px; flex: 1 0 100%; }
+        .side .nav-item { width: auto; }
+        .side-foot { display: none; }
+        .content, .topbar { padding-left: 16px; padding-right: 16px; }
+    }
+</style>
+</head>
+<body>
+
+<div id="login" class="login hidden">
+    <div class="login-card">
+        <div class="brand"><span class="brand-mark">IC</span>无限画布</div>
+        <h1>运营后台</h1>
+        <p>发信、支付、会员权限与套餐设置都在这里，与用户端完全分开。</p>
+        <div class="field">
+            <label for="pw">后台口令</label>
+            <input id="pw" type="password" placeholder="请输入后台口令" autocomplete="current-password">
+        </div>
+        <div id="loginMsg" class="banner banner-danger hidden" style="margin-top:12px"></div>
+        <div id="defaultPwWarn" class="banner banner-warn hidden" style="margin-top:12px"></div>
+        <button id="loginBtn" class="btn btn-primary" style="width:100%;margin-top:16px">进入后台</button>
+        <p style="margin:14px 0 0;font-size:11px;color:var(--faint)">口令由服务端环境变量 LICENSE_ADMIN_PASSWORD 决定。</p>
+    </div>
+</div>
+
+<div id="app" class="shell hidden">
+    <aside class="side">
+        <div class="brand"><span class="brand-mark">IC</span>运营后台</div>
+        <button class="nav-item" data-view="overview"><span class="dot"></span>概览</button>
+        <button class="nav-item" data-view="mail"><span class="dot"></span>发信配置</button>
+        <button class="nav-item" data-view="pay"><span class="dot"></span>支付配置</button>
+        <button class="nav-item" data-view="member"><span class="dot"></span>会员权限</button>
+        <button class="nav-item" data-view="plans"><span class="dot"></span>会员套餐</button>
+        <button class="nav-item" data-view="users"><span class="dot"></span>用户管理</button>
+        <button class="nav-item" data-view="orders"><span class="dot"></span>订单</button>
+        <div class="side-foot">
+            <div id="sideStatus">—</div>
+            <button id="logoutBtn" class="btn btn-ghost btn-sm" style="margin-top:8px;padding-left:0">退出登录</button>
+        </div>
+    </aside>
+    <div class="main">
+        <div class="topbar">
+            <div>
+                <h2 id="viewTitle">概览</h2>
+                <div class="sub" id="viewSub"></div>
+            </div>
+            <button id="refreshBtn" class="btn btn-sm">刷新</button>
+        </div>
+        <div class="content" id="content"></div>
+    </div>
+</div>
+
+<div id="modalHost"></div>
+<div id="toasts"></div>
+
+<script>
+(function () {
+    "use strict";
+
+    var TOKEN_KEY = "ic_admin_token";
+    var state = { token: sessionStorage.getItem(TOKEN_KEY) || "", view: "overview", cache: {}, defaultPassword: false };
+
+    var VIEWS = {
+        overview: { title: "概览", sub: "账号、订单与关键配置的整体情况" },
+        mail: { title: "发信配置", sub: "SMTP —— 注册验证码、找回密码等邮件都走这里" },
+        pay: { title: "支付配置", sub: "易支付商户参数，下单与异步通知都由服务端处理" },
+        member: { title: "会员权限", sub: "收费模式、试用天数、注册限制与会员权益" },
+        plans: { title: "会员套餐", sub: "会员时长与价格，前端购买页实时读取" },
+        users: { title: "用户管理", sub: "修改会员到期时间、启停账号、备注" },
+        orders: { title: "订单", sub: "支付状态与人工补单" }
+    };
+
+    /* ---------------- 基础工具 ---------------- */
+    function $(sel, root) { return (root || document).querySelector(sel); }
+    function esc(value) {
+        return String(value === undefined || value === null ? "" : value)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+    function toast(message, kind) {
+        var host = $("#toasts");
+        var node = document.createElement("div");
+        node.className = "toast " + (kind || "");
+        node.textContent = message;
+        host.appendChild(node);
+        setTimeout(function () { node.remove(); }, kind === "err" ? 5200 : 2600);
+    }
+    function fmtDate(value, withTime) {
+        if (!value) return "—";
+        var d = new Date(value);
+        if (isNaN(d.getTime())) return "—";
+        var pad = function (n) { return n < 10 ? "0" + n : "" + n; };
+        var base = d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+        return withTime ? base + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) : base;
+    }
+    function leftDays(until) {
+        if (!until) return null;
+        var diff = new Date(until).getTime() - Date.now();
+        if (!isFinite(diff)) return null;
+        return Math.max(0, Math.ceil(diff / 86400000));
+    }
+
+    function api(path, options) {
+        options = options || {};
+        var init = { method: options.method || "GET", headers: {} };
+        if (options.body !== undefined) {
+            init.headers["content-type"] = "application/json";
+            init.body = JSON.stringify(options.body);
+        }
+        if (state.token) init.headers.authorization = "Bearer " + state.token;
+        return fetch(path, init)
+            .then(function (response) {
+                return response.text().then(function (text) {
+                    var payload = null;
+                    try { payload = text ? JSON.parse(text) : null; } catch (e) { payload = null; }
+                    if (response.status === 401) {
+                        signOut("登录已失效，请重新登录");
+                        throw new Error("unauthorized");
+                    }
+                    if (!response.ok || !payload || payload.ok !== true) {
+                        var error = (payload && payload.error) || {};
+                        throw new Error(error.message || ("请求失败（HTTP " + response.status + "）"));
+                    }
+                    return payload.data;
+                });
+            });
+    }
+
+    /* ---------------- 登录 / 登出 ---------------- */
+    function showLogin(message) {
+        $("#app").classList.add("hidden");
+        $("#login").classList.remove("hidden");
+        $("#loginMsg").classList.add("hidden");
+        if (message) { $("#loginMsg").textContent = message; $("#loginMsg").classList.remove("hidden"); }
+        setTimeout(function () { $("#pw").focus(); }, 30);
+    }
+
+    function signOut(message) {
+        state.token = "";
+        sessionStorage.removeItem(TOKEN_KEY);
+        showLogin(message || "");
+    }
+
+    function doLogin() {
+        var password = $("#pw").value;
+        if (!password) return;
+        $("#loginBtn").disabled = true;
+        fetch("/api/admin/login", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ password: password })
+        })
+            .then(function (r) { return r.text().then(function (t) { return { status: r.status, body: t }; }); })
+            .then(function (res) {
+                var payload = null;
+                try { payload = JSON.parse(res.body); } catch (e) { payload = null; }
+                if (res.status !== 200 || !payload || !payload.ok) {
+                    var msg = (payload && payload.error && payload.error.message) || ("登录失败（HTTP " + res.status + "）");
+                    $("#loginMsg").textContent = msg;
+                    $("#loginMsg").classList.remove("hidden");
+                    return;
+                }
+                state.token = payload.data.token;
+                state.defaultPassword = !!payload.data.defaultPassword;
+                sessionStorage.setItem(TOKEN_KEY, state.token);
+                $("#pw").value = "";
+                enterApp();
+            })
+            .catch(function (error) {
+                $("#loginMsg").textContent = "无法连接服务：" + error.message;
+                $("#loginMsg").classList.remove("hidden");
+            })
+            .then(function () { $("#loginBtn").disabled = false; });
+    }
+
+    function enterApp() {
+        $("#login").classList.add("hidden");
+        $("#app").classList.remove("hidden");
+        if (state.defaultPassword) {
+            toast("正在使用默认口令，请立即改用强口令", "err");
+        }
+        openView(state.view || "overview");
+    }
+
+    /* ---------------- 视图框架 ---------------- */
+    function openView(name) {
+        state.view = name;
+        var meta = VIEWS[name] || VIEWS.overview;
+        $("#viewTitle").textContent = meta.title;
+        $("#viewSub").textContent = meta.sub;
+        Array.prototype.forEach.call(document.querySelectorAll(".nav-item"), function (node) {
+            node.classList.toggle("active", node.getAttribute("data-view") === name);
+        });
+        var content = $("#content");
+        content.innerHTML = '<div class="empty">加载中…</div>';
+        var loader = renderers[name];
+        if (!loader) return;
+        loader(content).catch(function (error) {
+            if (error.message === "unauthorized") return;
+            content.innerHTML = '<div class="banner banner-danger">' + esc(error.message) + "</div>";
+        });
+    }
+
+    /* ---------------- 概览 ---------------- */
+    function renderOverview(host) {
+        return Promise.all([api("/api/admin/overview"), api("/api/admin/settings")]).then(function (results) {
+            var data = results[0], conf = results[1];
+            var mail = conf.mail || {};
+            var settings = conf.settings || {};
+            var cards = [
+                ["注册用户", data.users], ["试用中", data.trialing], ["已付费", data.active],
+                ["已到期", data.expired], ["已停用", data.disabled], ["今日新增", data.todaySignups],
+                ["已支付订单", data.paidOrders + " / " + data.orders], ["累计收入", "¥" + data.revenue]
+            ];
+            var html = '<div class="stats">' + cards.map(function (pair) {
+                return '<div class="stat"><div class="k">' + esc(pair[0]) + '</div><div class="v">' + esc(pair[1]) + "</div></div>";
+            }).join("") + "</div>";
+
+            html += '<div class="card" style="margin-top:16px"><h3>运行状态</h3><p class="desc">下面几项直接决定用户能不能注册、能不能付款。</p>';
+            html += '<div class="table-wrap"><table><tbody>';
+            html += rowStatus("发信配置（SMTP）", mail.configured
+                ? '<span class="tag tag-ok">已配置</span> <span class="muted mono">' + esc(mail.host) + ":" + esc(mail.port) + "</span>"
+                : '<span class="tag tag-danger">未配置</span> <span class="muted">未配置时无法发送注册验证码</span>');
+            html += rowStatus("配置来源", mail.source === "db"
+                ? '<span class="tag tag-info">后台设置</span> <span class="muted">修改即时生效</span>'
+                : mail.source === "env"
+                    ? '<span class="tag tag-warn">环境变量</span> <span class="muted">在后台保存一次即可改为后台管理</span>'
+                    : '<span class="tag tag-mute">未设置</span>');
+            html += rowStatus("注册验证码", settings.requireEmailCode ? '<span class="tag tag-ok">强制验证</span>' : '<span class="tag tag-warn">未开启</span>');
+            html += rowStatus("开放注册", settings.registerEnabled === false ? '<span class="tag tag-danger">已关闭</span>' : '<span class="tag tag-ok">开放</span>');
+            html += rowStatus("收费模式", settings.paywallEnabled ? '<span class="tag tag-ok">开启</span> <span class="muted">试用 ' + esc(settings.trialDays) + " 天，到期需付费</span>" : '<span class="tag tag-info">免费模式</span> <span class="muted">所有登录用户可用</span>');
+            html += rowStatus("支付通道", (settings.epay && settings.epay.hasKey && settings.epay.pid)
+                ? '<span class="tag tag-ok">已配置</span> <span class="muted mono">pid ' + esc(settings.epay.pid) + "</span>"
+                : '<span class="tag tag-danger">未配置</span> <span class="muted">用户点击购买会报「支付通道未配置」</span>');
+            html += rowStatus("数据文件", '<span class="mono muted">' + esc(conf.dbFile || "—") + "</span>");
+            html += "</tbody></table></div></div>";
+
+            if (conf.devEchoCode) {
+                html += '<div class="banner banner-warn">验证码回显已开启（LICENSE_DEV_ECHO_CODE=1），验证码会直接返回给前端，生产环境请务必关闭。</div>';
+            }
+            host.innerHTML = html;
+            $("#sideStatus").textContent = (mail.configured ? "发信正常" : "发信未配置") + " · " + data.users + " 位用户";
+        });
+    }
+    function rowStatus(key, valueHtml) {
+        return "<tr><td style=\"width:150px\" class=\"muted\">" + esc(key) + "</td><td>" + valueHtml + "</td></tr>";
+    }
+
+    /* ---------------- 发信配置 ---------------- */
+    function renderMail(host) {
+        return api("/api/admin/settings").then(function (conf) {
+            var settings = conf.settings || {};
+            var stored = settings.smtp || {};
+            var mail = conf.mail || {};
+            state.cache.settings = settings;
+            state.cache.mail = mail;
+
+            // 还没在后台存过时，表单直接带出环境变量里的生效值，
+            // 避免「看到空表单 → 只改一处 → 保存后反而把发信搞坏」
+            var hasDb = !!String(stored.host || "").trim();
+            var smtp = {
+                host: hasDb ? stored.host : (mail.host || ""),
+                port: hasDb ? (stored.port || 465) : (mail.port || stored.port || 465),
+                secure: hasDb ? stored.secure !== false : (mail.host ? !!mail.secure : stored.secure !== false),
+                user: hasDb ? (stored.user || "") : (mail.user || stored.user || ""),
+                from: hasDb ? (stored.from || "") : (mail.from || stored.from || ""),
+                fromName: stored.fromName || "无限画布",
+                hasPass: Boolean(stored.hasPass || mail.configured)
+            };
+            var passHint = !smtp.hasPass
+                ? "QQ 邮箱填授权码"
+                : (mail.source === "env" && !hasDb ? "已由环境变量提供，留空表示不修改" : "已保存，留空表示不修改");
+
+            var sourceNote = mail.source === "env"
+                ? '<div class="banner banner-warn">当前发信参数来自服务端环境变量（下面已带出实际生效值）。保存一次后，就改为本页管理，环境变量不再覆盖。</div>'
+                : mail.source === "none"
+                    ? '<div class="banner banner-warn">还没有发信配置。填好下面几项并保存，注册验证码才能发出去。</div>'
+                    : '<div class="banner banner-ok">发信参数由本页管理，改完即时生效，无需重新部署。</div>';
+
+            host.innerHTML = '<div class="card">' +
+                '<div class="card-head"><div><h3>SMTP 发信</h3><p class="desc">常见填写：QQ 邮箱 smtp.qq.com:465（SSL）、163 邮箱 smtp.163.com:465、Gmail smtp.gmail.com:465。口令填授权码，不是邮箱登录密码。</p></div>' +
+                '<span class="tag ' + (mail.configured ? "tag-ok" : "tag-danger") + '">' + (mail.configured ? "已配置" : "未配置") + "</span></div>" +
+                sourceNote +
+                '<div class="grid2">' +
+                field("smtp-host", "发信服务器", '<input id="smtp-host" type="text" placeholder="smtp.qq.com" value="' + esc(smtp.host || "") + '">') +
+                field("smtp-port", "端口", '<input id="smtp-port" type="number" placeholder="465" value="' + esc(smtp.port || 465) + '">') +
+                field("smtp-secure", "加密方式", '<select id="smtp-secure"><option value="1"' + (smtp.secure ? " selected" : "") + '>SSL / 直连加密（465）</option><option value="0"' + (smtp.secure ? "" : " selected") + '>STARTTLS（587）</option></select>') +
+                field("smtp-user", "账号", '<input id="smtp-user" type="text" placeholder="you@qq.com" value="' + esc(smtp.user || "") + '">') +
+                field("smtp-pass", "密码 / 授权码", '<input id="smtp-pass" type="password" placeholder="' + passHint + '" autocomplete="new-password">') +
+                field("smtp-from", "发件地址", '<input id="smtp-from" type="text" placeholder="默认与账号相同" value="' + esc(smtp.from || "") + '">') +
+                field("smtp-fromName", "发件人名称", '<input id="smtp-fromName" type="text" value="' + esc(smtp.fromName || "无限画布") + '">') +
+                "</div>" +
+                '<div class="actions"><button class="btn btn-primary" id="saveMail">保存发信配置</button></div>' +
+                "</div>" +
+
+                '<div class="card"><h3>邮件自检</h3><p class="desc">先用下面几项配置试发一封，确认能收到再保存；避免存坏配置后验证码发不出去。</p>' +
+                '<div class="row"><div class="grow"><input id="testTo" type="email" placeholder="收件邮箱，例如 you@qq.com"></div>' +
+                '<button class="btn" id="testBtn">发送测试邮件</button></div>' +
+                '<div id="testResult" style="margin-top:12px"></div>' +
+                "</div>";
+
+            $("#saveMail").addEventListener("click", function () {
+                var btn = this;
+                btn.disabled = true;
+                var payload = {
+                    host: $("#smtp-host").value.trim(),
+                    port: Number($("#smtp-port").value) || 465,
+                    secure: $("#smtp-secure").value === "1",
+                    user: $("#smtp-user").value.trim(),
+                    from: $("#smtp-from").value.trim(),
+                    fromName: $("#smtp-fromName").value.trim(),
+                    pass: $("#smtp-pass").value
+                };
+                api("/api/admin/settings", { method: "PUT", body: { settings: { smtp: payload } } })
+                    .then(function () { toast("发信配置已保存", "ok"); return renderMail(host); })
+                    .catch(function (error) { if (error.message !== "unauthorized") toast(error.message, "err"); })
+                    .then(function () { btn.disabled = false; });
+            });
+
+            $("#testBtn").addEventListener("click", function () {
+                var btn = this;
+                var to = $("#testTo").value.trim();
+                if (!to) { toast("请先填收件邮箱", "err"); return; }
+                btn.disabled = true;
+                $("#testResult").innerHTML = '<div class="banner banner-info">正在发送…（最长 20 秒）</div>';
+                api("/api/admin/test-mail", {
+                    method: "POST",
+                    body: {
+                        to: to,
+                        smtp: {
+                            host: $("#smtp-host").value.trim(),
+                            port: Number($("#smtp-port").value) || 465,
+                            secure: $("#smtp-secure").value === "1",
+                            user: $("#smtp-user").value.trim(),
+                            from: $("#smtp-from").value.trim(),
+                            fromName: $("#smtp-fromName").value.trim(),
+                            pass: $("#smtp-pass").value
+                        }
+                    }
+                })
+                    .then(function (data) {
+                        $("#testResult").innerHTML = '<div class="banner banner-ok">已发出（' + esc(data.ms) + ' ms，' + esc(data.host) + ":" + esc(data.port) + "）。请查收收件箱与垃圾箱。</div>";
+                    })
+                    .catch(function (error) {
+                        if (error.message !== "unauthorized") $("#testResult").innerHTML = '<div class="banner banner-danger">' + esc(error.message) + "</div>";
+                    })
+                    .then(function () { btn.disabled = false; });
+            });
+        });
+    }
+    function field(id, label, control, hint) {
+        return '<div class="field"><label for="' + id + '">' + esc(label) + "</label>" + control + (hint ? '<span class="hint">' + esc(hint) + "</span>" : "") + "</div>";
+    }
+
+    /* ---------------- 支付配置 ---------------- */
+    function renderPay(host) {
+        return api("/api/admin/settings").then(function (conf) {
+            var settings = conf.settings || {};
+            var epay = settings.epay || {};
+            state.cache.settings = settings;
+            host.innerHTML = '<div class="card">' +
+                '<div class="card-head"><div><h3>易支付商户配置</h3><p class="desc">参数来自易支付商户后台。密钥只保存在服务端，页面只显示掩码；异步通知地址为 <span class="mono">/api/pay/notify</span>，需在商户后台确认可访问。</p></div>' +
+                '<span class="tag ' + (epay.hasKey && epay.pid ? "tag-ok" : "tag-danger") + '">' + (epay.hasKey && epay.pid ? "已配置" : "未配置") + "</span></div>" +
+                '<div class="field" style="margin-bottom:14px"><label for="epay-gateway">网关地址</label><input id="epay-gateway" type="text" value="' + esc(epay.gateway || "https://api-pc.nandiu.com/xpay/epay/submit.php") + '"></div>' +
+                '<div class="grid2">' +
+                field("epay-pid", "商户 ID（pid）", '<input id="epay-pid" type="text" placeholder="1000" value="' + esc(epay.pid || "") + '">') +
+                field("epay-key", "商户密钥", '<input id="epay-key" type="password" placeholder="' + (epay.hasKey ? "已保存，留空表示不修改" : "商户后台的密钥") + '" autocomplete="new-password">') +
+                field("epay-type", "默认支付方式", '<select id="epay-type"><option value="alipay"' + (epay.type === "wxpay" ? "" : " selected") + '>支付宝</option><option value="wxpay"' + (epay.type === "wxpay" ? " selected" : "") + '>微信支付</option></select>') +
+                field("epay-sitename", "网站名称", '<input id="epay-sitename" type="text" value="' + esc(epay.sitename || "无限画布") + '">', "显示在收银台") +
+                field("epay-support", "客服邮箱", '<input id="epay-support" type="email" placeholder="选填，显示在购买页" value="' + esc(epay.supportEmail || "") + '">') +
+                "</div>" +
+                '<div class="actions"><button class="btn btn-primary" id="savePay">保存支付配置</button></div>' +
+                '<p class="desc" style="margin:16px 0 0;font-size:11.5px">未配置 pid / 密钥时，用户点「立即支付」会收到「支付通道尚未配置」。除在线支付外，后台还可在订单列表里手动标记已支付（适用于线下转账）。</p>' +
+                "</div>";
+
+            $("#savePay").addEventListener("click", function () {
+                var btn = this;
+                btn.disabled = true;
+                api("/api/admin/settings", {
+                    method: "PUT",
+                    body: {
+                        settings: {
+                            epay: {
+                                gateway: $("#epay-gateway").value.trim(),
+                                pid: $("#epay-pid").value.trim(),
+                                key: $("#epay-key").value,
+                                type: $("#epay-type").value,
+                                sitename: $("#epay-sitename").value.trim(),
+                                supportEmail: $("#epay-support").value.trim()
+                            }
+                        }
+                    }
+                })
+                    .then(function () { toast("支付配置已保存", "ok"); return renderPay(host); })
+                    .catch(function (error) { if (error.message !== "unauthorized") toast(error.message, "err"); })
+                    .then(function () { btn.disabled = false; });
+            });
+        });
+    }
+
+    /* ---------------- 会员权限 ---------------- */
+    function renderMember(host) {
+        return api("/api/admin/settings").then(function (conf) {
+            var settings = conf.settings || {};
+            var mail = conf.mail || {};
+            state.cache.settings = settings;
+            host.innerHTML = '<div class="card">' +
+                '<div class="card-head"><div><h3>收费与试用</h3><p class="desc">这些开关直接决定用户端的登录与购买行为，保存后立即生效。</p></div></div>' +
+                switchRow("paywallEnabled", "开启收费模式", "关闭后所有登录用户都能免费使用全部功能（账号仍用于识别身份）。", settings.paywallEnabled) +
+                switchRow("registerEnabled", "开放自助注册", "关闭后注册接口返回「暂未开放注册」，已有账号可正常登录。", settings.registerEnabled !== false) +
+                switchRow("requireEmailCode", "注册需要邮箱验证码", mail.configured ? "开启后注册必须完成邮箱验证，可有效防止批量注册与薅羊毛。" : "发信未配置，该开关会被自动忽略（无法发送验证码）。", settings.requireEmailCode) +
+                '<div class="grid2" style="margin-top:16px">' +
+                field("trialDays", "免费试用天数", '<input id="trialDays" type="number" min="0" max="365" value="' + esc(settings.trialDays || 0) + '">', "注册即赠送；0 表示注册后必须立即购买") +
+                field("siteUrl", "用户端站点地址", '<input id="siteUrl" type="text" placeholder="https://canvas.example.com" value="' + esc(settings.siteUrl || "") + '">', "支付完成后跳回的地址；留空则用本服务地址") +
+                "</div>" +
+                '<div class="field" style="margin-top:14px"><label for="notice">购买页公告</label><textarea id="notice" placeholder="例如：新用户注册赠送 3 天，到期后可购买套餐续用">' + esc(settings.notice || "") + "</textarea></div>" +
+                "</div>" +
+
+                '<div class="card"><h3>注册邮箱域名白名单</h3><p class="desc">只允许这些邮箱域注册，防止滥用。每行一个（或用逗号分隔），子域名自动放行；留空表示不限制。</p>' +
+                '<textarea id="domains" style="min-height:120px">' + esc((settings.emailDomains || []).join("\n")) + "</textarea>" +
+                "</div>" +
+
+                '<div class="card"><h3>会员权益</h3><p class="desc">每行一条，前端购买页按顺序展示。留空则不显示该板块。</p>' +
+                '<textarea id="entitlements" style="min-height:110px">' + esc((settings.entitlements || []).join("\n")) + "</textarea>" +
+                "</div>" +
+
+                '<div class="actions"><button class="btn btn-primary" id="saveMember">保存会员设置</button></div>';
+
+            $("#saveMember").addEventListener("click", function () {
+                var btn = this;
+                btn.disabled = true;
+                api("/api/admin/settings", {
+                    method: "PUT",
+                    body: {
+                        settings: {
+                            paywallEnabled: $("#paywallEnabled").checked,
+                            registerEnabled: $("#registerEnabled").checked,
+                            requireEmailCode: $("#requireEmailCode").checked,
+                            trialDays: Number($("#trialDays").value) || 0,
+                            siteUrl: $("#siteUrl").value.trim(),
+                            notice: $("#notice").value,
+                            emailDomains: $("#domains").value.split(/[\s,;]+/).filter(Boolean),
+                            entitlements: $("#entitlements").value.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean)
+                        }
+                    }
+                })
+                    .then(function () { toast("会员设置已保存", "ok"); return renderMember(host); })
+                    .catch(function (error) { if (error.message !== "unauthorized") toast(error.message, "err"); })
+                    .then(function () { btn.disabled = false; });
+            });
+        });
+    }
+    function switchRow(id, title, desc, checked) {
+        return '<label class="row" style="align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);cursor:pointer">' +
+            '<input id="' + id + '" type="checkbox" style="width:16px;height:16px;margin-top:3px"' + (checked ? " checked" : "") + ">" +
+            '<span><span style="font-weight:500">' + esc(title) + '</span><br><span class="hint" style="color:var(--muted);font-size:12px">' + esc(desc) + "</span></span></label>";
+    }
+
+    /* ---------------- 套餐 ---------------- */
+    function renderPlans(host) {
+        return api("/api/admin/plans").then(function (data) {
+            var plans = data.plans || [];
+            var rows = plans.map(function (plan) {
+                return "<tr>" +
+                    "<td><div style=\"font-weight:500\">" + esc(plan.name) + "</div><div class=\"muted\" style=\"font-size:11px\">" + esc(plan.desc || "") + "</div></td>" +
+                    '<td class="nowrap">' + esc(plan.days) + " 天</td>" +
+                    '<td class="nowrap">¥' + esc(plan.price) + (plan.originalPrice ? ' <span class="muted" style="text-decoration:line-through">¥' + esc(plan.originalPrice) + "</span>" : "") + "</td>" +
+                    '<td class="nowrap">' + (plan.badge ? '<span class="tag tag-info">' + esc(plan.badge) + "</span>" : '<span class="muted">—</span>') + "</td>" +
+                    '<td class="nowrap">' + esc(plan.sort) + "</td>" +
+                    '<td class="nowrap">' + (plan.active ? '<span class="tag tag-ok">上架</span>' : '<span class="tag tag-mute">下架</span>') + "</td>" +
+                    '<td class="nowrap" style="text-align:right">' +
+                    '<button class="btn btn-sm" data-edit="' + esc(plan.id) + '">编辑</button> ' +
+                    '<button class="btn btn-sm" data-toggle="' + esc(plan.id) + '">' + (plan.active ? "下架" : "上架") + "</button> " +
+                    '<button class="btn btn-sm btn-danger" data-del="' + esc(plan.id) + '">删除</button>' +
+                    "</td></tr>";
+            }).join("");
+
+            host.innerHTML = '<div class="card"><div class="card-head"><div><h3>会员时长套餐</h3><p class="desc">用户购买页按排序展示上架套餐；已有售出订单的套餐删除时只会下架，历史订单保留。</p></div>' +
+                '<button class="btn btn-primary btn-sm" id="newPlan">新建套餐</button></div>' +
+                '<div class="table-wrap"><table><thead><tr><th>套餐</th><th>时长</th><th>价格</th><th>角标</th><th>排序</th><th>状态</th><th></th></tr></thead><tbody>' +
+                (rows || '<tr><td colspan="7" class="empty">还没有套餐，点右上角新建</td></tr>') +
+                "</tbody></table></div></div>";
+
+            $("#newPlan").addEventListener("click", function () { planDialog(null, host); });
+            Array.prototype.forEach.call(host.querySelectorAll("[data-edit]"), function (btn) {
+                btn.addEventListener("click", function () {
+                    var plan = plans.filter(function (item) { return item.id === btn.getAttribute("data-edit"); })[0];
+                    planDialog(plan, host);
+                });
+            });
+            Array.prototype.forEach.call(host.querySelectorAll("[data-toggle]"), function (btn) {
+                btn.addEventListener("click", function () {
+                    var id = btn.getAttribute("data-toggle");
+                    var plan = plans.filter(function (item) { return item.id === id; })[0];
+                    api("/api/admin/plans/" + encodeURIComponent(id), { method: "PUT", body: { plan: { active: !plan.active } } })
+                        .then(function () { toast("已更新", "ok"); openView("plans"); })
+                        .catch(function (error) { if (error.message !== "unauthorized") toast(error.message, "err"); });
+                });
+            });
+            Array.prototype.forEach.call(host.querySelectorAll("[data-del]"), function (btn) {
+                btn.addEventListener("click", function () {
+                    var id = btn.getAttribute("data-del");
+                    var plan = plans.filter(function (item) { return item.id === id; })[0];
+                    if (!confirm("确定删除「" + plan.name + "」？已产生订单的套餐只会下架，不会删除历史记录。")) return;
+                    api("/api/admin/plans/" + encodeURIComponent(id), { method: "DELETE" })
+                        .then(function (res) {
+                            toast(res.archived ? "该套餐已有售出订单，已改为下架" : "套餐已删除", "ok");
+                            openView("plans");
+                        })
+                        .catch(function (error) { if (error.message !== "unauthorized") toast(error.message, "err"); });
+                });
+            });
+        });
+    }
+
+    function planDialog(plan, host) {
+        var isNew = !plan;
+        var data = plan || { name: "", days: 31, price: "", originalPrice: "", badge: "", desc: "", sort: 10, active: true };
+        openModal({
+            title: isNew ? "新建套餐" : "编辑套餐",
+            fields: [
+                { key: "name", label: "套餐名称", value: data.name, placeholder: "季度会员" },
+                { key: "days", label: "会员时长（天）", type: "number", value: data.days },
+                { key: "price", label: "价格（元）", type: "number", step: "0.01", value: data.price, placeholder: "29.00" },
+                { key: "originalPrice", label: "划线价（选填）", type: "number", step: "0.01", value: data.originalPrice || "", placeholder: "39.00" },
+                { key: "badge", label: "角标（选填）", value: data.badge || "", placeholder: "推荐 / 最超值" },
+                { key: "desc", label: "套餐说明", value: data.desc || "", placeholder: "31 天全功能使用" },
+                { key: "sort", label: "排序（越小越靠前）", type: "number", value: data.sort }
+            ],
+            submitText: isNew ? "创建" : "保存",
+            onSubmit: function (values) {
+                var payload = {
+                    name: values.name, days: Number(values.days) || 0, price: values.price,
+                    originalPrice: values.originalPrice, badge: values.badge, desc: values.desc, sort: Number(values.sort) || 0
+                };
+                var path = isNew ? "/api/admin/plans" : "/api/admin/plans/" + encodeURIComponent(plan.id);
+                var method = isNew ? "POST" : "PUT";
+                return api(path, { method: method, body: { plan: payload } }).then(function () {
+                    toast(isNew ? "套餐已创建" : "套餐已保存", "ok");
+                    openView("plans");
+                });
+            }
+        });
+    }
+
+    /* ---------------- 用户 ---------------- */
+    function renderUsers(host) {
+        var keyword = state.cache.userQuery || "";
+        return api("/api/admin/users" + (keyword ? "?q=" + encodeURIComponent(keyword) : "")).then(function (data) {
+            var users = data.users || [];
+            var rows = users.map(function (user) {
+                var license = user.license || {};
+                var until = license.until || null;
+                var left = leftDays(until);
+                var tag;
+                if (license.state === "active") tag = '<span class="tag tag-ok">已付费</span>';
+                else if (license.state === "trial") tag = '<span class="tag tag-info">试用中</span>';
+                else if (license.state === "expired") tag = '<span class="tag tag-danger">已到期</span>';
+                else if (license.state === "disabled") tag = '<span class="tag tag-mute">已停用</span>';
+                else tag = '<span class="tag tag-mute">免费模式</span>';
+                return "<tr>" +
+                    '<td><div style="font-weight:500">' + esc(user.email) + "</div>" +
+                    (user.note ? '<div class="muted" style="font-size:11px">' + esc(user.note) + "</div>" : "") + "</td>" +
+                    '<td class="nowrap">' + tag + "</td>" +
+                    '<td class="nowrap">' + (until ? fmtDate(until) + (left === null ? "" : ' <span class="muted" style="font-size:11px">剩 ' + left + " 天</span>") : '<span class="muted">—</span>') + "</td>" +
+                    '<td class="nowrap muted">' + fmtDate(user.createdAt) + "</td>" +
+                    '<td class="nowrap muted">' + fmtDate(user.lastLoginAt, true) + "</td>" +
+                    '<td class="nowrap">' + esc(user.paidOrders) + "</td>" +
+                    '<td class="nowrap" style="text-align:right">' +
+                    '<button class="btn btn-sm" data-act="grant" data-id="' + esc(user.id) + '">开通</button> ' +
+                    '<button class="btn btn-sm" data-act="expiry" data-id="' + esc(user.id) + '" data-until="' + esc(until || "") + '">改到期</button> ' +
+                    '<button class="btn btn-sm" data-act="' + (user.status === "disabled" ? "enable" : "disable") + '" data-id="' + esc(user.id) + '">' + (user.status === "disabled" ? "启用" : "禁用") + "</button> " +
+                    '<button class="btn btn-sm btn-ghost" data-act="note" data-id="' + esc(user.id) + '" data-note="' + esc(user.note || "") + '">备注</button>' +
+                    "</td></tr>";
+            }).join("");
+
+            host.innerHTML = '<div class="card"><div class="card-head"><div><h3>用户（共 ' + esc(data.total) + " 位）</h3>" +
+                '<p class="desc">「开通」按天数顺延；「改到期」可精确指定到期日（客诉补偿用）。</p></div></div>' +
+                '<div class="row" style="margin-bottom:14px"><div class="grow"><input id="userQuery" type="text" placeholder="按邮箱搜索" value="' + esc(keyword) + '"></div>' +
+                '<button class="btn" id="userSearch">搜索</button><button class="btn btn-ghost" id="userReset">清空</button></div>' +
+                '<div class="table-wrap"><table><thead><tr><th>邮箱</th><th>状态</th><th>到期</th><th>注册时间</th><th>最近登录</th><th>已付订单</th><th></th></tr></thead><tbody>' +
+                (rows || '<tr><td colspan="7" class="empty">没有匹配的用户</td></tr>') +
+                "</tbody></table></div></div>";
+
+            $("#userSearch").addEventListener("click", function () {
+                state.cache.userQuery = $("#userQuery").value.trim();
+                openView("users");
+            });
+            $("#userQuery").addEventListener("keydown", function (event) {
+                if (event.key === "Enter") $("#userSearch").click();
+            });
+            $("#userReset").addEventListener("click", function () {
+                state.cache.userQuery = "";
+                openView("users");
+            });
+
+            Array.prototype.forEach.call(host.querySelectorAll("[data-act]"), function (btn) {
+                btn.addEventListener("click", function () {
+                    var id = btn.getAttribute("data-id");
+                    var act = btn.getAttribute("data-act");
+                    if (act === "grant") {
+                        openModal({
+                            title: "开通会员",
+                            fields: [{ key: "days", label: "开通天数（顺延）", type: "number", value: 31 }],
+                            submitText: "开通",
+                            onSubmit: function (values) {
+                                return api("/api/admin/users/" + encodeURIComponent(id) + "/action", { method: "POST", body: { action: "activate", days: Number(values.days) || 0 } })
+                                    .then(function () { toast("已开通", "ok"); openView("users"); });
+                            }
+                        });
+                    } else if (act === "expiry") {
+                        var until = btn.getAttribute("data-until");
+                        openModal({
+                            title: "修改到期时间",
+                            desc: "留空表示清除付费到期时间。",
+                            fields: [{ key: "until", label: "到期日", type: "date", value: until ? String(until).slice(0, 10) : "" }],
+                            submitText: "保存",
+                            onSubmit: function (values) {
+                                return api("/api/admin/users/" + encodeURIComponent(id) + "/action", { method: "POST", body: { action: "set-expiry", until: values.until } })
+                                    .then(function () { toast("到期时间已更新", "ok"); openView("users"); });
+                            }
+                        });
+                    } else if (act === "note") {
+                        openModal({
+                            title: "备注",
+                            fields: [{ key: "note", label: "备注（仅后台可见）", value: btn.getAttribute("data-note") || "" }],
+                            submitText: "保存",
+                            onSubmit: function (values) {
+                                return api("/api/admin/users/" + encodeURIComponent(id) + "/action", { method: "POST", body: { action: "note", note: values.note } })
+                                    .then(function () { toast("已保存", "ok"); openView("users"); });
+                            }
+                        });
+                    } else {
+                        api("/api/admin/users/" + encodeURIComponent(id) + "/action", { method: "POST", body: { action: act } })
+                            .then(function () { toast(act === "disable" ? "账号已禁用" : "账号已启用", "ok"); openView("users"); })
+                            .catch(function (error) { if (error.message !== "unauthorized") toast(error.message, "err"); });
+                    }
+                });
+            });
+        });
+    }
+
+    /* ---------------- 订单 ---------------- */
+    function renderOrders(host) {
+        var status = state.cache.orderStatus || "";
+        return api("/api/admin/orders" + (status ? "?status=" + encodeURIComponent(status) : "")).then(function (data) {
+            var orders = data.orders || [];
+            var rows = orders.map(function (order) {
+                var tag = order.status === "paid" ? '<span class="tag tag-ok">已支付</span>'
+                    : order.status === "closed" ? '<span class="tag tag-mute">已关闭</span>'
+                        : '<span class="tag tag-warn">待支付</span>';
+                return "<tr>" +
+                    '<td><div class="mono">' + esc(order.outTradeNo) + "</div><div class=\"muted\" style=\"font-size:11px\">" + esc(order.email) + "</div></td>" +
+                    '<td class="nowrap">' + esc(order.planName) + ' <span class="muted">(' + esc(order.days) + " 天)</span></td>" +
+                    '<td class="nowrap">¥' + esc(order.money) + "</td>" +
+                    '<td class="nowrap">' + tag + "</td>" +
+                    '<td class="nowrap muted">' + fmtDate(order.createdAt, true) + "</td>" +
+                    '<td class="nowrap muted">' + (order.paidAt ? fmtDate(order.paidAt, true) : "—") + "</td>" +
+                    '<td class="nowrap" style="text-align:right">' + (order.status === "paid" ? "" : '<button class="btn btn-sm" data-paid="' + esc(order.outTradeNo) + '">标记已支付</button>') + "</td>" +
+                    "</tr>";
+            }).join("");
+
+            host.innerHTML = '<div class="card"><div class="card-head"><div><h3>订单</h3><p class="desc">正常情况由易支付异步通知自动开通；线下转账可用「标记已支付」手动补单。</p></div>' +
+                '<select id="orderStatus" style="width:auto"><option value=""' + (status ? "" : " selected") + '>全部</option><option value="paid"' + (status === "paid" ? " selected" : "") + '>已支付</option><option value="pending"' + (status === "pending" ? " selected" : "") + '>待支付</option></select></div>' +
+                '<div class="table-wrap"><table><thead><tr><th>订单号</th><th>套餐</th><th>金额</th><th>状态</th><th>创建时间</th><th>支付时间</th><th></th></tr></thead><tbody>' +
+                (rows || '<tr><td colspan="7" class="empty">暂无订单</td></tr>') +
+                "</tbody></table></div></div>";
+
+            $("#orderStatus").addEventListener("change", function () {
+                state.cache.orderStatus = this.value;
+                openView("orders");
+            });
+            Array.prototype.forEach.call(host.querySelectorAll("[data-paid]"), function (btn) {
+                btn.addEventListener("click", function () {
+                    var no = btn.getAttribute("data-paid");
+                    if (!confirm("确认这笔订单已收款？将立即为该用户开通对应天数。")) return;
+                    api("/api/admin/orders/" + encodeURIComponent(no) + "/paid", { method: "POST" })
+                        .then(function () { toast("已标记为已支付并开通", "ok"); openView("orders"); })
+                        .catch(function (error) { if (error.message !== "unauthorized") toast(error.message, "err"); });
+                });
+            });
+        });
+    }
+
+    /* ---------------- 弹窗 ---------------- */
+    function openModal(options) {
+        var host = $("#modalHost");
+        var fields = options.fields || [];
+        var fieldsHtml = fields.map(function (item) {
+            var type = item.type || "text";
+            var step = item.step ? ' step="' + item.step + '"' : "";
+            var control = type === "textarea"
+                ? '<textarea id="mf-' + item.key + '" placeholder="' + esc(item.placeholder || "") + '">' + esc(item.value || "") + "</textarea>"
+                : '<input id="mf-' + item.key + '" type="' + type + '"' + step + ' value="' + esc(item.value === undefined || item.value === null ? "" : item.value) + '" placeholder="' + esc(item.placeholder || "") + '">';
+            return field("mf-" + item.key, item.label, control);
+        }).join("");
+
+        host.innerHTML = '<div class="mask"><div class="modal"><h3>' + esc(options.title) + "</h3>" +
+            (options.desc ? '<p class="desc" style="margin:-10px 0 14px;font-size:12px;color:var(--muted)">' + esc(options.desc) + "</p>" : "") +
+            '<div class="fields">' + fieldsHtml + "</div>" +
+            '<div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn btn-primary" data-submit>' + esc(options.submitText || "保存") + "</button></div>" +
+            "</div></div>";
+
+        function close() { host.innerHTML = ""; }
+        host.querySelector("[data-close]").addEventListener("click", close);
+        host.querySelector(".mask").addEventListener("click", function (event) {
+            if (event.target === event.currentTarget) close();
+        });
+        host.querySelector("[data-submit]").addEventListener("click", function () {
+            var btn = this;
+            var values = {};
+            fields.forEach(function (item) { values[item.key] = host.querySelector("#mf-" + item.key).value; });
+            btn.disabled = true;
+            Promise.resolve(options.onSubmit(values))
+                .then(close)
+                .catch(function (error) {
+                    if (error && error.message !== "unauthorized") toast(error.message, "err");
+                })
+                .then(function () { btn.disabled = false; });
+        });
+        var first = host.querySelector("input, textarea");
+        if (first) setTimeout(function () { first.focus(); first.select && first.select(); }, 40);
+    }
+
+    /* ---------------- 渲染器表 ---------------- */
+    var renderers = {
+        overview: renderOverview,
+        mail: renderMail,
+        pay: renderPay,
+        member: renderMember,
+        plans: renderPlans,
+        users: renderUsers,
+        orders: renderOrders
+    };
+
+    /* ---------------- 事件绑定 ---------------- */
+    Array.prototype.forEach.call(document.querySelectorAll(".nav-item"), function (node) {
+        node.addEventListener("click", function () { openView(node.getAttribute("data-view")); });
+    });
+    $("#loginBtn").addEventListener("click", doLogin);
+    $("#pw").addEventListener("keydown", function (event) {
+        if (event.key === "Enter") doLogin();
+    });
+    $("#logoutBtn").addEventListener("click", function () { signOut("已退出登录"); });
+    $("#refreshBtn").addEventListener("click", function () { openView(state.view); });
+
+    if (state.token) {
+        api("/api/admin/overview")
+            .then(function () { enterApp(); })
+            .catch(function () { showLogin(""); });
+    } else {
+        showLogin("");
+    }
+})();
+</script>
+</body>
+</html>

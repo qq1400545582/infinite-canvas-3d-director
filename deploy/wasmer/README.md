@@ -11,8 +11,8 @@
 | 站点 | **https://infinite-canvas-3d-director.wasmer.app** |
 | 管理台 | https://wasmer.io/apps/1400545582/infinite-canvas-3d-director |
 | 应用 / 归属 | `infinite-canvas-3d-director` / `1400545582` |
-| 包 | `1400545582/infinite-canvas-3d-director@0.2.0` |
-| 当前产物 | 强制登录版（`VITE_LICENSE_API=https://infinite-canvas-license.wasmer.app` + `VITE_LICENSE_REQUIRED=1`），未登录访问会被导到 `/login` |
+| 包 | `1400545582/infinite-canvas-3d-director@0.3.0` |
+| 当前产物 | 强制登录版（`VITE_LICENSE_API=https://infinite-canvas-license.wasmer.app` + `VITE_LICENSE_REQUIRED=1`），未登录访问会被导到 `/login`；**不含运营后台**（后台在授权服务的 `/admin`） |
 | 首批状态 | app v1，已 active |
 
 > 包版本号**不能重复**：同一 version 再 `deploy` 会报 `The version 0.1.0 already exists`。

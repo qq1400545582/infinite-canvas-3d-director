@@ -50,16 +50,34 @@ export const DEFAULT_SETTINGS = {
     emailDomains: DEFAULT_EMAIL_DOMAINS,
     /** 注册是否必须邮箱验证码。SMTP 未配置时会自动降级为 false。 */
     requireEmailCode: true,
+    /** 是否开放自助注册；关闭后只有后台能建号（登录不受影响）。 */
+    registerEnabled: true,
     /** 前端站点地址，用于支付同步跳转（return_url）与后台展示。 */
     siteUrl: "",
     /** 站点公告，会显示在购买页。 */
     notice: "",
+    /** 会员权益清单：后台可增删改，前端购买页逐条展示。 */
+    entitlements: ["画布全部节点与生成能力", "云端工程与素材同步", "本地 Agent / Codex 接入", "后续版本免费更新"],
     epay: {
         gateway: "https://api-pc.nandiu.com/xpay/epay/submit.php",
         pid: "",
         key: "",
         type: "alipay",
         sitename: "无限画布",
+        supportEmail: "",
+    },
+    /**
+     * 发信配置。入库后后台可直接改，无需重新部署；空 host 时回退到环境变量
+     * （SMTP_HOST/SMTP_USER/... 仍可用，老部署不受影响）。
+     */
+    smtp: {
+        host: "",
+        port: 465,
+        secure: true,
+        user: "",
+        pass: "",
+        from: "",
+        fromName: "无限画布",
     },
 };
 

@@ -25,6 +25,8 @@ export type PublicSettings = {
     trialDays: number;
     emailDomains: string[];
     requireEmailCode: boolean;
+    registerEnabled: boolean;
+    entitlements: string[];
     notice: string;
     siteUrl: string;
     supportEmail: string;
@@ -38,30 +40,6 @@ export type LicensePlan = {
     originalPrice: string;
     desc: string;
     badge: string;
-};
-
-export type AdminPlan = LicensePlan & { active: boolean; sort: number };
-
-export type AdminSettings = PublicSettings & {
-    epay: { gateway: string; pid: string; key: string; type: string; sitename: string; hasKey?: boolean };
-};
-
-export type AdminOrder = {
-    outTradeNo: string;
-    email: string;
-    planName: string;
-    days: number;
-    money: string;
-    status: "pending" | "paid" | "closed";
-    createdAt: string;
-    paidAt: string | null;
-    tradeNo: string;
-};
-
-export type AdminUser = LicenseUser & {
-    lastLoginAt: string;
-    note: string;
-    paidOrders: number;
 };
 
 export class LicenseApiError extends Error {
@@ -159,64 +137,7 @@ export function fetchOrder(token: string, outTradeNo: string) {
     );
 }
 
-/* ---------------- 后台 ---------------- */
-
-export function adminLogin(password: string) {
-    return request<{ token: string; defaultPassword: boolean }>("/api/admin/login", { method: "POST", body: { password } });
-}
-
-export function adminOverview(token: string) {
-    return request<{
-        users: number;
-        trialing: number;
-        active: number;
-        expired: number;
-        disabled: number;
-        orders: number;
-        paidOrders: number;
-        revenue: string;
-        todaySignups: number;
-        smtpConfigured: boolean;
-        devEchoCode: boolean;
-    }>("/api/admin/overview", { token });
-}
-
-export function adminGetSettings(token: string) {
-    return request<{ settings: AdminSettings; smtpConfigured: boolean; devEchoCode: boolean; dbFile: string }>("/api/admin/settings", { token });
-}
-
-export function adminPutSettings(token: string, settings: Partial<AdminSettings>) {
-    return request<{ settings: AdminSettings }>("/api/admin/settings", { method: "PUT", body: { settings }, token });
-}
-
-export function adminTestMail(token: string, to: string) {
-    return request<{ sent: boolean; ms: number }>("/api/admin/test-mail", { method: "POST", body: { to }, token });
-}
-
-export function adminListPlans(token: string) {
-    return request<{ plans: AdminPlan[] }>("/api/admin/plans", { token });
-}
-
-export function adminSavePlan(token: string, plan: Partial<AdminPlan>, id?: string) {
-    return request<{ plan: AdminPlan; plans: AdminPlan[] }>(id ? `/api/admin/plans/${id}` : "/api/admin/plans", { method: id ? "PUT" : "POST", body: { plan }, token });
-}
-
-export function adminDeletePlan(token: string, id: string) {
-    return request<{ deleted?: boolean; archived?: boolean; plans: AdminPlan[] }>(`/api/admin/plans/${id}`, { method: "DELETE", token });
-}
-
-export function adminListUsers(token: string, keyword = "") {
-    return request<{ users: AdminUser[]; total: number }>(`/api/admin/users${keyword ? `?q=${encodeURIComponent(keyword)}` : ""}`, { token });
-}
-
-export function adminUserAction(token: string, id: string, action: "activate" | "disable" | "enable" | "reset-trial", days?: number) {
-    return request<{ user: AdminUser }>(`/api/admin/users/${id}/action`, { method: "POST", body: { action, days }, token });
-}
-
-export function adminListOrders(token: string, status = "") {
-    return request<{ orders: AdminOrder[] }>(`/api/admin/orders${status ? `?status=${status}` : ""}`, { token });
-}
-
-export function adminMarkPaid(token: string, outTradeNo: string) {
-    return request<{ order: AdminOrder }>(`/api/admin/orders/${outTradeNo}/paid`, { method: "POST", token });
-}
+/*
+ * 运营后台（发信 / 支付 / 会员权限 / 套餐 / 用户 / 订单）由授权服务自己托管，
+ * 入口是 <授权服务域名>/admin；本应用不再内置后台页面，也不再发任何后台请求。
+ */

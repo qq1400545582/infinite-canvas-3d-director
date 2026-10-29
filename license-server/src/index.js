@@ -7,7 +7,7 @@
 import "./env.js";
 import { createServer } from "node:http";
 import { handle, errorPayload } from "./api.js";
-import { mailerConfigured } from "./mailer.js";
+import { mailerConfigured, smtpSource } from "./mailer.js";
 import { dbFile, load, saveNow } from "./store.js";
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
@@ -63,9 +63,18 @@ load();
 saveNow()
     .then(() => {
         server.listen(PORT, HOST, () => {
-            console.log(`\n  无限画布授权服务已启动  http://${HOST === "0.0.0.0" ? "127.0.0.1" : HOST}:${PORT}`);
+            const base = `http://${HOST === "0.0.0.0" ? "127.0.0.1" : HOST}:${PORT}`;
+            const source = smtpSource();
+            console.log(`\n  无限画布授权服务已启动  ${base}`);
+            console.log(`  运营后台：${base}/admin`);
             console.log(`  数据文件：${dbFile}`);
-            console.log(`  发信配置：${mailerConfigured() ? "已配置" : "未配置（验证码注册不可用，或改用 LICENSE_DEV_ECHO_CODE=1 本地调试）"}`);
+            console.log(
+                `  发信配置：${
+                    mailerConfigured()
+                        ? `已配置（来源：${source === "db" ? "后台设置" : "环境变量"}，可在 /admin 内修改）`
+                        : "未配置（可在 /admin → 发信配置 里填写；本地调试也可用 LICENSE_DEV_ECHO_CODE=1）"
+                }`,
+            );
             if (!process.env.LICENSE_ADMIN_PASSWORD) {
                 console.log("  ⚠ 未设置 LICENSE_ADMIN_PASSWORD，后台口令使用默认值 admin123，请尽快修改");
             }

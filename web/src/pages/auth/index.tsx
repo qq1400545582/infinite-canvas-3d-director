@@ -40,11 +40,18 @@ export default function AuthPage() {
 
     const from = ((location.state as { from?: string } | null)?.from || "/") as string;
     const requiresCode = settings?.requireEmailCode ?? true;
+    // 后台关闭自助注册时，只留登录入口（已有账号不受影响）
+    const registerOpen = settings ? settings.registerEnabled !== false : true;
+    const modes: Mode[] = registerOpen ? ["login", "register"] : ["login"];
     const domains = useMemo(() => (settings?.emailDomains || []).slice(0, 12), [settings?.emailDomains]);
 
     useEffect(() => {
         void loadPublic();
     }, [loadPublic]);
+
+    useEffect(() => {
+        if (!registerOpen && mode === "register") setMode("login");
+    }, [mode, registerOpen]);
 
     useEffect(() => {
         if (currentToken) navigate(from, { replace: true });
@@ -136,8 +143,8 @@ export default function AuthPage() {
                         </div>
                     </div>
 
-                    <div className="mt-6 grid grid-cols-2 gap-1 rounded-xl bg-stone-100 p-1 dark:bg-stone-800">
-                        {(["login", "register"] as Mode[]).map((item) => (
+                    <div className={cn("mt-6 grid gap-1 rounded-xl bg-stone-100 p-1 dark:bg-stone-800", registerOpen ? "grid-cols-2" : "grid-cols-1")}>
+                        {modes.map((item) => (
                             <button
                                 key={item}
                                 type="button"
@@ -217,7 +224,9 @@ export default function AuthPage() {
                         </button>
                     </form>
 
-                    {settings && settings.trialDays > 0 ? (
+                    {settings && !registerOpen ? (
+                        <p className="mt-4 rounded-lg bg-stone-50 px-3 py-2 text-center text-[11px] leading-5 text-stone-500 dark:bg-stone-800/60 dark:text-stone-400">{t("license.auth.registerClosed")}</p>
+                    ) : settings && settings.trialDays > 0 ? (
                         <p className="mt-4 rounded-lg bg-stone-50 px-3 py-2 text-center text-[11px] leading-5 text-stone-500 dark:bg-stone-800/60 dark:text-stone-400">
                             {t("license.auth.trialNote", { days: settings.trialDays })}
                         </p>
@@ -238,9 +247,6 @@ export default function AuthPage() {
                         </div>
                     ) : null}
                     {serviceOpen ? <p className="mt-1.5 text-[10px] leading-4 text-stone-400">{t("license.auth.serviceHint")}</p> : null}
-                    <button type="button" className="mt-1 text-[10px] text-stone-400 underline-offset-2 hover:underline" onClick={() => navigate("/admin")}>
-                        {t("license.admin.entry")}
-                    </button>
                 </div>
             </div>
         </div>
