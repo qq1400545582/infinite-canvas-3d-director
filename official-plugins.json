@@ -1,0 +1,77 @@
+{
+    "version": 1,
+    "plugins": [
+        {
+            "id": "markdown",
+            "name": "Markdown 节点",
+            "version": "1.1.0",
+            "description": "在画布中编辑与渲染 Markdown",
+            "icon": "📝",
+            "entry": "markdown.js"
+        },
+        {
+            "id": "svg",
+            "name": "SVG 节点",
+            "version": "1.1.0",
+            "description": "透明背景渲染 SVG,可接收上游文本节点的 SVG 源码",
+            "icon": "🔷",
+            "entry": "svg.js"
+        },
+        {
+            "id": "html",
+            "name": "HTML 节点",
+            "version": "1.2.0",
+            "description": "沙箱 iframe 渲染 HTML,支持 {{input}} 注入上游文本",
+            "icon": "🌐",
+            "entry": "html.js"
+        },
+        {
+            "id": "panorama",
+            "name": "3D 全景节点",
+            "version": "1.1.0",
+            "description": "查看 360° 等距柱状全景图,可从上游图片节点取图",
+            "icon": "🧭",
+            "entry": "panorama.js"
+        },
+        {
+            "id": "sticky-note",
+            "name": "便利贴节点",
+            "version": "1.1.0",
+            "description": "可自选颜色、双击编辑、拖动即可移动的便利贴",
+            "icon": "📌",
+            "entry": "sticky-note.js"
+        },
+        {
+            "id": "jlmlh-3d-director",
+            "name": "3D 导演台节点",
+            "version": "1.0.0",
+            "description": "在画布内嵌 jlmlh-3d-director 三维导演台:模型导入、机位管理、时间线动画、截图导出到画布",
+            "icon": "🎬",
+            "entry": "jlmlh-3d-director.js"
+        },
+        {
+            "id": "openreel-video",
+            "name": "OpenReel 视频编辑器",
+            "version": "1.0.0",
+            "description": "在画布内嵌 OpenReel 浏览器端专业视频编辑器:时间线剪辑、转场、滤镜、字幕、ffmpeg 导出",
+            "icon": "🎬",
+            "entry": "openreel-video.js"
+        },
+        {
+            "id": "director-desk",
+            "name": "白模预演台节点",
+            "version": "1.0.0",
+            "description": "在画布内嵌 DirectorDesk 白模预演台:glTF/GLB 导入、机位与灯光布置、实时白模预览",
+            "icon": "🏗️",
+            "entry": "director-desk.js"
+        },
+        {
+            "id": "clipshot",
+            "name": "分镜工作台节点",
+            "version": "1.2.0",
+            "description": "按 clipshot Skill 规范把剧本拆成可自定义格数（默认九宫格）的制作型分镜与时间线镜头表，并可连接下游节点按分镜序列逐格出图",
+            "icon": "🎬",
+            "entry": "clipshot.js"
+        }
+    ]
+}
